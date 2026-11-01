@@ -11,5 +11,5 @@ COPY sbc ./sbc
 RUN useradd --create-home --uid 10001 app && chown -R app /app
 USER app
 EXPOSE 8000
-# Railway setzt PORT. "::" bindet IPv4+IPv6 (nötig für Railway Private Networking).
-CMD ["sh", "-c", "uvicorn sbc.api.main:app --host :: --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
+# Railway setzt PORT. sbc.serve lauscht Dual-Stack (IPv4 für Healthcheck, IPv6 für Private Networking).
+CMD ["python", "-m", "sbc.serve"]

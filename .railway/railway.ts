@@ -47,7 +47,8 @@ export default defineRailway(() => {
   const backend = service("backend", {
     source: github(REPO, { branch: BRANCH, rootDirectory: "apps/backend" }),
     // Build über apps/backend/Dockerfile (Railway nutzt ein vorhandenes Dockerfile automatisch)
-    start: "uvicorn sbc.api.main:app --host :: --port 8000 --proxy-headers --forwarded-allow-ips=*",
+    // Dual-Stack (IPv4 für den Healthcheck, IPv6 für Private Networking) – siehe sbc/serve.py
+    start: "python -m sbc.serve",
     // Migrationen + Bootstrap laufen vor jedem Deploy; ein Fehler stoppt das Deployment
     preDeploy: "alembic upgrade head && python -m sbc.cli bootstrap",
     healthcheck: "/health",
