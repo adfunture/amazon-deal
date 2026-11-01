@@ -29,15 +29,25 @@ from sbc.security.auth import hash_password  # noqa: E402
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")  # z. B. Postgres in CI
+
+
 @pytest.fixture()
 def engine():
-    eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    if TEST_DATABASE_URL:
+        # Gleiche Tests gegen echtes PostgreSQL (strengeres SQL als SQLite, z. B. GROUP BY)
+        url = TEST_DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+        eng = create_engine(url)
+        Base.metadata.drop_all(eng)
+        Base.metadata.create_all(eng)
+    else:
+        eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
 
-    @event.listens_for(eng, "connect")
-    def _fk(conn, _):
-        conn.execute("PRAGMA foreign_keys=ON")
+        @event.listens_for(eng, "connect")
+        def _fk(conn, _):
+            conn.execute("PRAGMA foreign_keys=ON")
 
-    Base.metadata.create_all(eng)
+        Base.metadata.create_all(eng)
     dbmod.set_engine(eng)
     yield eng
     eng.dispose()

@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import func, literal_column, select, text
 from sqlalchemy.orm import Session
 
 from sbc import __version__
@@ -91,8 +91,11 @@ def dashboard(user: CurrentUser = Depends(current_user), db: Session = Depends(g
     potential = db.scalar(select(func.sum(Opportunity.contribution)).where(*live, Opportunity.is_excluded.is_(False)))
     top = db.scalars(select(Opportunity).where(*live, Opportunity.is_excluded.is_(False))
                      .order_by(Opportunity.score.desc()).limit(10))
-    buckets = db.execute(select(func.floor(Opportunity.score / 10), func.count()).where(*live)
-                         .group_by(func.floor(Opportunity.score / 10))).all()
+    # Ein einziges Label-Objekt für SELECT und GROUP BY: Postgres verlangt identische Ausdrücke,
+    # zwei getrennt gebundene Parameter (score / :p1 vs. score / :p2) gelten dort als verschieden.
+    bucket = func.floor(Opportunity.score / literal_column("10")).label("bucket")
+    buckets = db.execute(select(bucket, func.count()).where(*live, Opportunity.score.is_not(None))
+                         .group_by(bucket)).all()
     usage = db.execute(select(APIUsage.provider, func.sum(APIUsage.units), func.sum(APIUsage.cost_eur))
                        .where(APIUsage.created_at >= since).group_by(APIUsage.provider)).all()
     imports = db.execute(select(ImportJob.status, func.count()).where(ImportJob.org_id == org)
