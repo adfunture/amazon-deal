@@ -244,10 +244,22 @@ def parse_product(p: dict, country: str, now: datetime | None = None) -> KeepaLi
         if mean > 0:
             cv = Decimal(str(round(statistics.pstdev(float(x) for x in last90) / mean, 5)))
 
+    # Buy Box: Keepa liefert den aktuellen Wert bei stats-Abfragen auch separat (stats.buyBoxPrice,
+    # live geprüft 2026-11) – current[18] ist dann oft -1.
+    buybox = _price(cur(IDX_BUY_BOX))
+    if buybox is None and isinstance(stats.get("buyBoxPrice"), int) and stats["buyBoxPrice"] > 0:
+        ship = stats.get("buyBoxShipping") if isinstance(stats.get("buyBoxShipping"), int) else 0
+        buybox = _price(stats["buyBoxPrice"] + max(ship, 0))
+    rank = cur(IDX_SALES)
+    if not (isinstance(rank, int) and rank > 0):
+        ranks = p.get("salesRanks") or {}
+        ref = str(p.get("salesRankReference")) if p.get("salesRankReference") else None
+        series = ranks.get(ref) if ref in ranks else next(iter(ranks.values()), None)
+        rank = series[-1] if series and len(series) >= 2 and series[-1] > 0 else None
+
     gtins = [*(p.get("eanList") or []), *(p.get("upcList") or [])]
     tree = p.get("categoryTree") or []
     amazon_cur = cur(IDX_AMAZON)
-    rank = cur(IDX_SALES)
     count_new = cur(IDX_COUNT_NEW)
     return KeepaListing(
         asin=p["asin"],
@@ -262,7 +274,7 @@ def parse_product(p: dict, country: str, now: datetime | None = None) -> KeepaLi
         number_of_items=p.get("numberOfItems") if (p.get("numberOfItems") or 0) > 0 else None,
         category=" > ".join(c.get("name", "") for c in tree) if tree else None,
         image_urls=_images(p),
-        buybox_price=_price(cur(IDX_BUY_BOX)),
+        buybox_price=buybox,
         new_price=_price(cur(IDX_NEW)),
         amazon_price=_price(amazon_cur),
         avg30_price=_price(_stat(stats, "avg30", IDX_BUY_BOX)) or _price(_stat(stats, "avg30", IDX_NEW)),
@@ -274,7 +286,8 @@ def parse_product(p: dict, country: str, now: datetime | None = None) -> KeepaLi
         sales_rank_drops90=stats.get("salesRankDrops90") if (stats.get("salesRankDrops90") or -1) >= 0 else None,
         monthly_sold=p.get("monthlySold") if (p.get("monthlySold") or 0) > 0 else None,
         offer_count_new=count_new if isinstance(count_new, int) and count_new >= 0 else None,
-        amazon_is_seller=(amazon_cur is not None and amazon_cur >= 0) if amazon_cur is not None else None,
+        amazon_is_seller=(True if stats.get("buyBoxIsAmazon") is True
+                          else (amazon_cur >= 0) if isinstance(amazon_cur, int) else None),
         history={"buybox": buybox_hist[-200:], "new": new_hist[-200:]},
         raw_meta={k: p.get(k) for k in ("asin", "domainId", "lastUpdate", "lastPriceChange",
                                           "rootCategory", "productType", "parentAsin")},

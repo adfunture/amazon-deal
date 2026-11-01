@@ -7,13 +7,16 @@
 import { bucket, defineRailway, github, group, postgres, preserve, project, redis, service } from "railway/iac";
 
 // GitHub-Repository – vor dem ersten `railway config plan` anpassen.
-const REPO = "sbcsymbio/sbc-sourcing-intelligence";
+const REPO = "REPLACE_OWNER/REPLACE_REPO";
 const BRANCH = "main";
+// EU-Betrieb: Compute in EU West (Amsterdam). Bucket-Regionen sind sjc|iad|ams|sin – ohne Angabe
+// legt Railway den Bucket in sjc (USA) an, daher explizit "ams". Nicht nachträglich änderbar.
+const EU = { "europe-west4-drams3a": 1 };
 
 export default defineRailway(() => {
   const db = postgres("postgres");
   const cache = redis("redis");
-  const files = bucket("sbc-files");
+  const files = bucket("sbc-files", { region: "ams" });
 
   // Gemeinsame Variablen für alle Python-Services (backend, worker, scheduler)
   const pythonEnv = {
@@ -48,6 +51,7 @@ export default defineRailway(() => {
     preDeploy: "alembic upgrade head && python -m sbc.cli bootstrap",
     healthcheck: "/health",
     healthcheckTimeout: 120,
+    replicas: EU,
     env: {
       ...pythonEnv,
       PORT: "8000",
@@ -61,6 +65,7 @@ export default defineRailway(() => {
   const worker = service("worker", {
     source: github(REPO, { branch: BRANCH, rootDirectory: "apps/backend" }),
     start: "dramatiq sbc.worker.tasks --processes 2 --threads 4",
+    replicas: EU,
     env: pythonEnv,
   });
 
@@ -68,7 +73,7 @@ export default defineRailway(() => {
   const scheduler = service("scheduler", {
     source: github(REPO, { branch: BRANCH, rootDirectory: "apps/backend" }),
     start: "python -m sbc.scheduler.main",
-    replicas: 1,
+    replicas: EU, // genau 1 Instanz
     env: {
       ...pythonEnv,
       TZ: "Europe/Berlin",
@@ -81,6 +86,7 @@ export default defineRailway(() => {
     start: "npm run start",
     healthcheck: "/api/health",
     healthcheckTimeout: 120,
+    replicas: EU,
     env: {
       NODE_ENV: "production",
       NEXT_TELEMETRY_DISABLED: "1",

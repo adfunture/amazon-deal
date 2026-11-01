@@ -41,9 +41,21 @@ von Login, Dashboard, Opportunities, Detailseite und Matching-Review samt Bestä
 | Railway | ✅ `.railway/railway.ts` (frontend, backend, worker, scheduler, Postgres, Redis, Bucket, Private Networking, Pre-Deploy-Migration, Healthchecks). **Noch nicht deployt**, `railway config plan` steht noch aus (siehe offene Punkte) |
 | n8n | ✅ 6 Workflows erzeugt und strukturell geprüft, **noch nicht in n8n importiert** |
 
+## Live-Tests mit echten Schlüsseln (2026-11-01)
+
+- **Keepa**: Abfrage einer echten EAN (STABILO point 88) liefert 7 Listings, darunter fremde Produkte mit
+  falsch gepflegter EAN (Trinkflasche, Korsage). Das bestätigt, dass die EAN allein nicht reicht.
+  Buy Box: Keepa liefert sie bei `stats` zusätzlich als `stats.buyBoxPrice` (−2 = aktuell keine Buy Box).
+  Der Parser wertet das jetzt aus, ohne Buy Box gilt der niedrigste Neupreis.
+- **Keepa-Tarif: 5 Tokens/Minute** (≈ 7.200 Produkte/Tag). 100.000 Artikel/Tag sind damit über Keepa nicht
+  erreichbar. Gegenmittel: Cache, nur Angebote mit EAN, Level-1-Vorfilter, ggf. größerer Keepa-Tarif.
+- **Claude** (`claude-opus-5-5`, effort low): ca. 1,3 Cent je Prüfung. Bewertet die falsche EAN (Flasche) als Konflikt
+  und erkennt bei einem spanischen 10er-Listing die abweichende Farbe („azul claro“ ≠ schwarz). Farbwörter ES/FR/IT
+  sind seitdem auch in den Regeln enthalten.
+
 ## Was noch fehlt (ehrlich)
 
-- **Live-Verifikation** mit echten Zugangsdaten: Keepa, Claude, Railway Bucket, Postgres/Redis auf Railway.
+- **Live-Verifikation auf Railway**: Bucket, Postgres und Redis (Keepa und Claude sind lokal live getestet).
   Lokal liefen SQLite und der StubBroker; das Postgres-Schema wird erst auf Railway angewendet.
 - **Kein Lasttest** mit 100.000 Artikeln/Tag (Phase 6).
 - **Phase 3**: Bildvergleich steckt in der KI-Stufe, ein eigener Vision-Workflow mit Bild-Download und Hashing fehlt;

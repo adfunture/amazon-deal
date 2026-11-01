@@ -45,6 +45,13 @@ _COLORS = {
     "gold": "gold", "grau": "grey", "grey": "grey", "gray": "grey", "rosa": "pink", "pink": "pink",
     "braun": "brown", "brown": "brown", "orange": "orange", "lila": "purple", "violett": "purple",
     "purple": "purple", "beige": "beige", "anthrazit": "anthracite", "navy": "navy",
+    # ES/FR/IT – Amazon-EU-Listings tauchen häufig marktplatzübergreifend auf
+    "negro": "black", "noir": "black", "nero": "black", "blanco": "white", "blanc": "white", "bianco": "white",
+    "rojo": "red", "rouge": "red", "rosso": "red", "azul": "blue", "bleu": "blue", "blu": "blue",
+    "verde": "green", "vert": "green", "amarillo": "yellow", "jaune": "yellow", "giallo": "yellow",
+    "gris": "grey", "grigio": "grey", "plata": "silver", "argent": "silver", "argento": "silver",
+    "rosa": "pink", "rose": "pink", "marrón": "brown", "marron": "brown", "marrone": "brown",
+    "naranja": "orange", "arancione": "orange", "morado": "purple", "violet": "purple", "viola": "purple",
 }
 
 

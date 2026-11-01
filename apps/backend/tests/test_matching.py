@@ -82,3 +82,9 @@ def test_calibration_needs_samples():
     many = [(0.96, True)] * (MIN_SAMPLES - 5) + [(0.97, False)] * 5
     conf, ok = calibrate(Decimal("0.96"), build_bins(many))
     assert ok and Decimal("0.7") < conf < Decimal("0.8")
+
+
+def test_foreign_color_conflict():
+    o = compare(V("STABILO point 88 Fineliner schwarz", "STABILO", ["4006381333931"]),
+                V("Rotulador Stabilo point 88 azul claro", "Stabilo", ["4006381333931"]))
+    assert "color" in o.mismatched and o.classification == MatchClass.VARIANT_MATCH

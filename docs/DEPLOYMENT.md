@@ -52,8 +52,10 @@ railway config plan     # zeigt die geplanten Änderungen, ändert nichts
 railway config apply    # fragt vor dem Anwenden nach
 ```
 
-Den Plan vor dem Anwenden prüfen. Die **Bucket-Region lässt sich nach der Erstellung nicht ändern**. Wenn der Speicher
-in der EU liegen muss, in `railway.ts` `bucket("sbc-files", { region: "…" })` mit der gewünschten Region setzen.
+Den Plan vor dem Anwenden prüfen. Die **Bucket-Region lässt sich nach der Erstellung nicht ändern**. `railway.ts` setzt
+`region: "ams"` (EU West, Amsterdam), denn ohne Angabe landet der Bucket in `sjc` (USA). Die Services laufen über
+`replicas: { "europe-west4-drams3a": 1 }` in EU West. Für Postgres und Redis die Standardregion des Projekts auf
+EU West stellen (Project Settings), **bevor** `config apply` die Datenbanken anlegt.
 
 **pgvector:** Die Migration aktiviert `vector` nur, wenn die Postgres-Instanz die Erweiterung anbietet
 (`pg_available_extensions`). Matching und Suche funktionieren ohne pgvector (Trigramm-Indizes über `pg_trgm`).

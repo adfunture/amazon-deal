@@ -32,6 +32,18 @@ def test_parse_product():
     assert kl.min90_price is not None and kl.price_cv90 is not None
 
 
+def test_parse_buybox_from_stats_field():
+    import copy
+
+    p = copy.deepcopy(FIXTURE["products"][0])
+    p["stats"]["current"][18] = -1
+    p["stats"].update({"buyBoxPrice": 1349, "buyBoxShipping": 0, "buyBoxIsAmazon": True})
+    p["stats"]["current"][3] = -1
+    p["salesRanks"] = {"123": [1000, 5000, 1010, 4200]}
+    kl = k.parse_product(p, "DE")
+    assert kl.buybox_price == Decimal("13.49") and kl.amazon_is_seller is True and kl.sales_rank == 4200
+
+
 def test_keepa_time_conversion():
     assert k.keepa_minutes_to_dt(0).year == 2011
 
