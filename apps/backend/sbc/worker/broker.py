@@ -5,6 +5,7 @@ from __future__ import annotations
 import dramatiq
 from dramatiq.brokers.stub import StubBroker
 
+from sbc import logging_setup  # noqa: F401  (keine Secrets in Logs)
 from sbc.config import get_settings
 
 

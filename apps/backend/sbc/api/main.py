@@ -14,6 +14,9 @@ from sbc.config import get_settings
 settings = get_settings()
 logging.basicConfig(stream=sys.stdout, level=settings.log_level,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
+from sbc import logging_setup  # noqa: E402
+
+logging_setup.configure()
 log = logging.getLogger("sbc.api")
 
 app = FastAPI(

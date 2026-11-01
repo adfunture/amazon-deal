@@ -17,7 +17,7 @@ from sbc.models import ImportJob, ImportStatus, MarketplaceListing, Opportunity,
 from sbc.worker import jobs
 
 log = logging.getLogger(__name__)
-ANALYZE_CHUNK = 50
+ANALYZE_CHUNK = 100  # = Keepa-Maximum je Request
 
 # Queues: "imports" (Priorität hoch), "analysis", "maintenance". Mehrere Worker-Prozesse
 # können gezielt Queues bedienen: dramatiq sbc.worker.tasks --queues imports analysis
@@ -61,6 +61,29 @@ def analyze_offers(offer_ids: list[str], use_keepa: bool = True) -> None:
     bg = jobs.start("analyze_offers", {"count": len(offer_ids), "use_keepa": use_keepa}, priority=5)
     done, summaries = 0, []
     try:
+        if use_keepa:
+            # Keepa gebündelt vorab abfragen (bis zu 100 EANs je Request statt 1 Request je Angebot).
+            # Danach liegen die Listings frisch in der DB; die Einzelanalyse braucht keine API mehr.
+            from sbc.config import get_settings
+            from sbc.integrations.keepa import KeepaError
+            from sbc.integrations.keepa_service import lookup_codes
+            from sbc.integrations.usage import BudgetExceeded
+
+            if get_settings().keepa_api_key:
+                with session_scope() as db:
+                    offers = [o for o in (db.get(SupplierOffer, uuid.UUID(i)) for i in offer_ids) if o is not None]
+                    gtins = sorted({o.gtin for o in offers if o.gtin})
+                    if gtins:
+                        try:
+                            lookup_codes(db, offers[0].org_id, gtins, "DE")
+                        except KeepaTokensExhausted as e:
+                            analyze_offers.send_with_options(args=(offer_ids, use_keepa),
+                                                             delay=int(e.retry_after_s * 1000) + 5000)
+                            jobs.finish(bg, t0, {"done": 0, "requeued": len(offer_ids), "reason": str(e)})
+                            return
+                        except (BudgetExceeded, KeepaError) as e:
+                            log.warning("Keepa-Vorabfrage übersprungen: %s", e)
+                use_keepa = False
         for oid in offer_ids:
             with session_scope() as db:
                 offer = db.get(SupplierOffer, uuid.UUID(oid))

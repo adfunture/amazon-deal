@@ -15,6 +15,9 @@ from apscheduler.triggers.cron import CronTrigger
 from sbc.worker import tasks
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+from sbc import logging_setup  # noqa: E402
+
+logging_setup.configure()
 log = logging.getLogger("sbc.scheduler")
 
 SCHEDULE = {

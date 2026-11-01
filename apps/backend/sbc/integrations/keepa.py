@@ -25,6 +25,8 @@ from typing import Any
 
 import httpx
 
+from sbc import logging_setup  # noqa: F401  (Keepa-Key steht in der URL → httpx-URL-Logging aus)
+
 BASE_URL = "https://api.keepa.com"
 KEEPA_EPOCH_OFFSET_MIN = 21564000
 DOMAINS = {"US": 1, "GB": 2, "DE": 3, "FR": 4, "JP": 5, "CA": 6, "IT": 8, "ES": 9}
