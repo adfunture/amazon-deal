@@ -22,6 +22,14 @@ def dual_stack_socket(port: int) -> socket.socket:
 
 
 def main() -> None:
+    # Admin/Org/Gebührenprofile sicherstellen (idempotent). Läuft zusätzlich zum Pre-Deploy,
+    # weil dessen Ausgabe in den Railway-Logs nicht sichtbar ist.
+    try:
+        from sbc.cli import bootstrap
+
+        bootstrap()
+    except Exception as e:  # Start der API nicht verhindern
+        print(f"FEHLER beim Bootstrap: {e.__class__.__name__}: {e}", flush=True)
     port = int(os.environ.get("PORT", "8000"))
     sock = dual_stack_socket(port)
     config = uvicorn.Config("sbc.api.main:app", proxy_headers=True, forwarded_allow_ips="*",

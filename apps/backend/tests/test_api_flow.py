@@ -257,3 +257,29 @@ def test_api_keys(client):
     client.delete(f"/api/v1/auth/api-keys/{created['id']}")
     assert anon.get("/api/v1/suppliers", headers={"X-API-Key": created["key"]}).status_code == 401
     assert "key_hash" not in client.get("/api/v1/auth/api-keys").json()[0]
+
+
+def test_bootstrap_creates_missing_admin_and_never_resets(db, org, monkeypatch, capsys):
+    from sbc import cli
+    from sbc.config import get_settings
+    from sbc.models import User
+    from sbc.security.auth import verify_password
+
+    _user(db, org, "andere@test.de", Role.viewer)
+    monkeypatch.setenv("INITIAL_ADMIN_EMAIL", "Chef@Test.de")
+    monkeypatch.setenv("INITIAL_ADMIN_PASSWORD", "kurz")
+    get_settings.cache_clear()
+    cli.bootstrap()
+    assert "mindestens 10 Zeichen" in capsys.readouterr().out
+    monkeypatch.setenv("INITIAL_ADMIN_PASSWORD", "Langes-Passwort-1")
+    get_settings.cache_clear()
+    cli.bootstrap()
+    assert "Admin angelegt: chef@test.de" in capsys.readouterr().out
+    monkeypatch.setenv("INITIAL_ADMIN_PASSWORD", "Anderes-Passwort-2")
+    get_settings.cache_clear()
+    cli.bootstrap()
+    assert "existiert bereits" in capsys.readouterr().out
+    db.expire_all()
+    admin = db.query(User).filter_by(email="chef@test.de").one()
+    assert admin.role == Role.admin and verify_password("Langes-Passwort-1", admin.password_hash)
+    get_settings.cache_clear()
