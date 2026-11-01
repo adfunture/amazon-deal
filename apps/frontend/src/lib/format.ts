@@ -56,5 +56,5 @@ export const DECISION_TONE: Record<string, "good" | "warn" | "bad"> = {
 
 export const CONFLICT_LABELS: Record<string, string> = {
   brand: "Marke", condition: "Zustand", color: "Farbe", size: "Größe", measures: "Maße/Inhalt",
-  unit_quantity: "Verkaufseinheit", identity_changed: "Identität geändert",
+  material: "Material", unit_quantity: "Verkaufseinheit", identity_changed: "Identität geändert",
 };

@@ -19,6 +19,10 @@ _PACK_PATTERNS = [
     re.compile(r"\b(\d{1,3})\s*[\-\s]?\s*(?:pack|pcs|pc|stk|stck|stück|stueck|teilig|tlg|pieces?|units?)\b\.?", re.I),
     re.compile(r"(?:^|\s)(\d{1,2})\s*[x×]\s+(?=[a-zäöü])", re.I),  # "2 x Casio ..."
     re.compile(r"\b[x×]\s*(\d{1,3})\b(?!\s*(?:mm|cm|m|ml|l|g|kg)\b)", re.I),  # "Filter x2"
+    # FR/IT/ES/NL/PL: "lot de 2", "pack de 3", "confezione da 2", "set van 2", "zestaw 2", "paquete de 4"
+    re.compile(r"\b(?:lot|pack|paquete|confezione|conf\.?|set|zestaw|opakowanie|verpakking)\s*(?:de|da|di|van|of|po)?\s*(\d{1,3})\b", re.I),
+    # "2 pièces", "2 pezzi", "2 piezas", "2 stuks", "2 szt", "2 sztuki", "2 unités", "2 unidades"
+    re.compile(r"\b(\d{1,3})\s*(?:pièces?|pieces|pcs|pezzi|pz|piezas|uds|unidades|unités|stuks|st|szt\.?|sztuki|sztuk)\b", re.I),
 ]
 _WORD_PACKS = {
     "doppelpack": 2,
@@ -28,9 +32,12 @@ _WORD_PACKS = {
     "dreierpack": 3,
     "triple pack": 3,
     "viererpack": 4,
+    "duo pack": 2, "lot de deux": 2, "confezione doppia": 2, "pack doble": 2, "duopak": 2, "dwupak": 2,
 }
 _BUNDLE_HINTS = re.compile(
-    r"(\bbundle\b|\bset\b|\bkit\b|\binkl\.?|\binklusive\b|\bincl\.?|\bincluding\b|\bmit\b.+\bund\b|\s\+\s|\bgeschenkset\b|\bgift set\b|\bzubehör\b)",
+    r"(\bbundle\b|\bset\b|\bkit\b|\binkl\.?|\binklusive\b|\bincl\.?|\bincluding\b|\bmit\b.+\bund\b|\s\+\s|\bgeschenkset\b|\bgift set\b|\bzubehör\b"
+    r"|\bcoffret\b|\bavec\b.+\bet\b|\bincluso\b|\bcon\b.+\be\b|\bincluye\b|\bjuego\b|\binclusief\b|\bzestaw\b|\bw zestawie\b"
+    r"|\baccessoires?\b|\baccessori\b|\baccesorios\b|\baccessories\b)",
     re.I,
 )
 _MEASURE = re.compile(
@@ -52,6 +59,14 @@ _COLORS = {
     "gris": "grey", "grigio": "grey", "plata": "silver", "argent": "silver", "argento": "silver",
     "rose": "pink", "marrón": "brown", "marron": "brown", "marrone": "brown",
     "naranja": "orange", "arancione": "orange", "morado": "purple", "violet": "purple", "viola": "purple",
+    # NL/PL
+    "zwart": "black", "wit": "white", "rood": "red", "blauw": "blue", "groen": "green", "geel": "yellow",
+    "grijs": "grey", "zilver": "silver", "bruin": "brown", "roze": "pink", "paars": "purple",
+    "czarny": "black", "czarna": "black", "czarne": "black", "biały": "white", "biała": "white", "białe": "white",
+    "czerwony": "red", "czerwona": "red", "niebieski": "blue", "niebieska": "blue", "zielony": "green",
+    "zielona": "green", "żółty": "yellow", "szary": "grey", "szara": "grey", "srebrny": "silver",
+    "brązowy": "brown", "różowy": "pink", "fioletowy": "purple", "pomarańczowy": "orange",
+    "noire": "black", "blanche": "white", "nera": "black", "bianca": "white", "negra": "black", "blanca": "white",
 }
 
 
@@ -67,6 +82,29 @@ def _norm_size(raw: str) -> str:
     if m:
         return "X" * int(m.group(1)) + "L"
     return r
+
+
+_MATERIALS = {
+    "cotton": ["baumwolle", "cotton", "coton", "cotone", "algodón", "algodon", "katoen", "bawełna", "bawelna"],
+    "leather": ["leder", "echtleder", "leather", "cuir", "pelle", "cuoio", "cuero", "piel", "leer", "skóra", "skora"],
+    "steel": ["edelstahl", "stahl", "steel", "stainless", "inox", "acier", "acciaio", "acero", "staal", "rvs", "stal"],
+    "aluminium": ["aluminium", "aluminum", "alu", "alluminio", "aluminio", "aluminium"],
+    "plastic": ["kunststoff", "plastik", "plastic", "plastique", "plastica", "plástico", "plastico", "kunststof",
+                "tworzywo", "plastikowy"],
+    "wood": ["holz", "wood", "wooden", "bois", "legno", "madera", "hout", "drewno", "drewniany"],
+    "glass": ["glas", "glass", "verre", "vetro", "vidrio", "szkło", "szklo"],
+    "polyester": ["polyester", "poliestere", "poliéster", "poliester"],
+    "wool": ["wolle", "wool", "merino", "laine", "lana", "wol", "wełna", "welna"],
+    "silicone": ["silikon", "silicone", "silicona", "siliconen"],
+}
+_MATERIAL_WORDS = {w: m for m, ws in _MATERIALS.items() for w in ws}
+
+
+def extract_materials(title: str | None) -> set[str]:
+    if not title:
+        return set()
+    words = re.findall(r"[^\W\d_]+", unicodedata.normalize("NFKC", title).lower())
+    return {_MATERIAL_WORDS[w] for w in words if w in _MATERIAL_WORDS}
 
 
 def extract_sizes(title: str | None) -> set[str]:
@@ -97,6 +135,7 @@ class TitleAttributes:
     measures: set[str] = field(default_factory=set)
     colors: set[str] = field(default_factory=set)
     sizes: set[str] = field(default_factory=set)
+    materials: set[str] = field(default_factory=set)
     model_tokens: set[str] = field(default_factory=set)
 
     def as_dict(self) -> dict:
@@ -107,6 +146,7 @@ class TitleAttributes:
             "measures": sorted(self.measures),
             "colors": sorted(self.colors),
             "sizes": sorted(self.sizes),
+            "materials": sorted(self.materials),
             "model_tokens": sorted(self.model_tokens),
         }
 
@@ -139,10 +179,11 @@ def extract_attributes(title: str | None, brand: str | None = None) -> TitleAttr
         if num.endswith(".0"):
             num = num[:-2]
         attrs.measures.add(f"{num}{m.group(2).lower()}")
-    for word in re.findall(r"[a-zäöüß]+", norm):
+    for word in re.findall(r"[^\W\d_]+", norm):
         if word in _COLORS:
             attrs.colors.add(_COLORS[word])
     attrs.sizes = extract_sizes(title)
+    attrs.materials = extract_materials(title)
     brand_up = (brand or "").upper()
     for tok in _MODEL_TOKEN.findall(title.upper()):
         tok = tok.strip("-/.")

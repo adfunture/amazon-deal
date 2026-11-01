@@ -19,7 +19,7 @@ from sbc.domain.identifiers import normalize_mpn
 from sbc.domain.text import extract_attributes, normalize_text
 from sbc.models import SupplierOffer
 
-KEYS = ("gtin", "mpn", "brand", "unit_quantity", "condition", "colors", "sizes", "measures")
+KEYS = ("gtin", "mpn", "brand", "unit_quantity", "condition", "colors", "sizes", "measures", "materials")
 
 
 def identity_attrs(offer: SupplierOffer) -> dict:
@@ -33,6 +33,7 @@ def identity_attrs(offer: SupplierOffer) -> dict:
         "colors": sorted(ta.colors),
         "sizes": sorted(ta.sizes),
         "measures": sorted(ta.measures),
+        "materials": sorted(ta.materials),
     }
 
 

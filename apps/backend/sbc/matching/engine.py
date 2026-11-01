@@ -18,19 +18,20 @@ from decimal import Decimal
 from rapidfuzz import fuzz
 
 from sbc.domain.identifiers import normalize_gtin, normalize_mpn
+from sbc.domain.lang import canonical_text, detect_language
 from sbc.domain.text import extract_attributes, extract_pack_quantity, normalize_text
 from sbc.models import MatchClass
 
-ENGINE_VERSION = "match-1.1.0"
+ENGINE_VERSION = "match-1.2.0"
 
 # Punkte je Signal (Summe wird auf 0..100 begrenzt). Fehlende Information = 0 Punkte, nie positiv.
 POINTS = {
     "gtin": 45, "gtin_differs": -10, "mpn": 30, "mpn_in_title": 20, "brand": 10, "brand_conflict": -30,
     "title_max": 25, "model_tokens": 10, "color_conflict": -30, "size_conflict": -30,
-    "measure_conflict": -20, "condition_conflict": -40, "unit_unclear": -20,
+    "measure_conflict": -20, "material_conflict": -20, "condition_conflict": -40, "unit_unclear": -20,
 }
 # Identitätskritische Widersprüche verhindern jede automatische Bestätigung – unabhängig vom Score.
-IDENTITY_CONFLICTS = ("brand", "condition", "color", "size", "measures", "unit_quantity")
+IDENTITY_CONFLICTS = ("brand", "condition", "color", "size", "measures", "material", "unit_quantity")
 
 
 class Decision:
@@ -157,8 +158,20 @@ def compare(supplier: ItemView, listing: ItemView) -> MatchOutcome:
     text_sim = 0.0
     if st and lt:
         text_sim = max(fuzz.token_set_ratio(st, lt), fuzz.partial_token_sort_ratio(st, lt)) / 100
+        # Sprachübergreifend: Begriffe/Farben auf Konzepte abbilden (Marken, Modelle bleiben unverändert)
+        protected = set(normalize_text(f"{supplier.brand or ''} {listing.brand or ''}").split())
+        sc, lc = canonical_text(supplier.title, protected), canonical_text(listing.title, protected)
+        cross_sim = fuzz.token_set_ratio(sc, lc) / 100 if sc and lc else 0.0
+        s_lang, l_lang = detect_language(supplier.title), detect_language(listing.title)
+        if s_lang or l_lang:
+            matched["languages"] = {"supplier": s_lang, "listing": l_lang}
+        detail = f"Titelähnlichkeit {text_sim:.0%}"
+        if cross_sim > text_sim:
+            text_sim = cross_sim
+            detail = f"Titelähnlichkeit sprachübergreifend {cross_sim:.0%}"
+            matched["title_crosslingual"] = {"supplier": sc, "listing": lc}
         matched["title_similarity"] = round(text_sim, 3)
-        add("title", POINTS["title_max"] * text_sim, f"Titelähnlichkeit {text_sim:.0%}")
+        add("title", POINTS["title_max"] * text_sim, detail)
 
     sa = extract_attributes(supplier.title, supplier.brand)
     la = extract_attributes(listing.title, listing.brand)
@@ -172,6 +185,10 @@ def compare(supplier: ItemView, listing: ItemView) -> MatchOutcome:
         mismatched["size"] = {"supplier": sorted(s_sizes), "listing": sorted(la.sizes)}
         add("size", POINTS["size_conflict"], "Größe abweichend")
         reasons.append("Größe abweichend")
+    if sa.materials and la.materials and not (sa.materials & la.materials):
+        mismatched["material"] = {"supplier": sorted(sa.materials), "listing": sorted(la.materials)}
+        add("material", POINTS["material_conflict"], "Material abweichend")
+        reasons.append("Material abweichend")
     if sa.measures and la.measures and not (sa.measures & la.measures):
         mismatched["measures"] = {"supplier": sorted(sa.measures), "listing": sorted(la.measures)}
         add("measures", POINTS["measure_conflict"], "Maße/Mengen abweichend")
@@ -209,7 +226,7 @@ def compare(supplier: ItemView, listing: ItemView) -> MatchOutcome:
 
     # ---------------- Klassifizierung (regelbasiert)
     hard_conflict = any(k in mismatched for k in ("brand", "condition"))
-    variant_conflict = any(k in mismatched for k in ("color", "size", "measures"))
+    variant_conflict = any(k in mismatched for k in ("color", "size", "measures", "material"))
     bundle_hint = la.bundle_hint and not sa.bundle_hint
 
     def out(cls: MatchClass, needs_ai: bool = False, stage: str = "identifier") -> MatchOutcome:
