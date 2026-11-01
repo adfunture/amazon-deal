@@ -7,7 +7,7 @@
 import { bucket, defineRailway, github, group, postgres, preserve, project, redis, service } from "railway/iac";
 
 // GitHub-Repository – vor dem ersten `railway config plan` anpassen.
-const REPO = "REPLACE_OWNER/REPLACE_REPO";
+const REPO = "adfunture/amazon-deal";
 const BRANCH = "main";
 // EU-Betrieb: Compute in EU West (Amsterdam). Bucket-Regionen sind sjc|iad|ams|sin – ohne Angabe
 // legt Railway den Bucket in sjc (USA) an, daher explizit "ams". Nicht nachträglich änderbar.

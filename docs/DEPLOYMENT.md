@@ -28,11 +28,11 @@ im Code beschrieben, und die Zeitpläne liegen versioniert in `sbc/scheduler/mai
 
 ```bash
 cd sbc-sourcing-intelligence
-git remote add origin git@github.com:<org>/sbc-sourcing-intelligence.git
+git remote add origin https://github.com/adfunture/amazon-deal.git
 git push -u origin main
 ```
 
-Danach `REPO` in `.railway/railway.ts` auf `<org>/sbc-sourcing-intelligence` setzen und die Railway-GitHub-App
+Danach `REPO` in `.railway/railway.ts` ist auf `adfunture/amazon-deal` gesetzt und die Railway-GitHub-App
 für das Repository freigeben (Railway → Account Settings → GitHub).
 
 ## 2. Railway-Projekt erstellen und verknüpfen
