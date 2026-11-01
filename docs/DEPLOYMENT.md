@@ -45,7 +45,12 @@ railway link            # im Repo-Root
 
 ## 3.–7. PostgreSQL, Redis, Bucket und Services anlegen
 
-Alles wird aus `.railway/railway.ts` erzeugt:
+Alles wird aus `.railway/railway.ts` erzeugt. Voraussetzungen: Railway CLI ≥ 5.42.1 (`npm i -g @railway/cli`) und
+das TypeScript-SDK im Repo-Root (`npm install`, Paket `railway`).
+
+> **Windows/Git Bash:** Das SDK prüft die CLI-Version über die Umgebungsvariable `_`, die Git Bash auf ein
+> Shell-Skript setzt. Deshalb aus PowerShell ausführen und vorher `$env:_` auf
+> `…\npm\node_modules\@railway\cli\bin\railway.exe` setzen.
 
 ```bash
 railway config plan     # zeigt die geplanten Änderungen, ändert nichts

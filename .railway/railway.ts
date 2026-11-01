@@ -4,18 +4,19 @@
 //
 // Nicht hier ausdrückbar und daher im Railway-Dashboard zu setzen (siehe docs/DEPLOYMENT.md):
 // Restart-Policy (Standard ON_FAILURE genügt), öffentliche Railway-Domain für das Frontend.
-import { bucket, defineRailway, github, group, postgres, preserve, project, redis, service } from "railway/iac";
+import { bucket, defineRailway, github, group, postgres, preserve, project, redis, ref, service } from "railway/iac";
 
 // GitHub-Repository – vor dem ersten `railway config plan` anpassen.
 const REPO = "adfunture/amazon-deal";
 const BRANCH = "main";
 // EU-Betrieb: Compute in EU West (Amsterdam). Bucket-Regionen sind sjc|iad|ams|sin – ohne Angabe
 // legt Railway den Bucket in sjc (USA) an, daher explizit "ams". Nicht nachträglich änderbar.
-const EU = { "europe-west4-drams3a": 1 };
+const EU_REGION = "europe-west4-drams3a";
+const EU = { [EU_REGION]: 1 };
 
 export default defineRailway(() => {
-  const db = postgres("postgres");
-  const cache = redis("redis");
+  const db = postgres("postgres", { region: EU_REGION });
+  const cache = redis("redis", { region: EU_REGION });
   const files = bucket("sbc-files", { region: "ams" });
 
   // Gemeinsame Variablen für alle Python-Services (backend, worker, scheduler)
@@ -25,11 +26,11 @@ export default defineRailway(() => {
     DATABASE_URL: db.env.DATABASE_URL,
     REDIS_URL: cache.env.REDIS_URL,
     STORAGE_BACKEND: "s3",
-    S3_ENDPOINT: files.env.ENDPOINT,
-    S3_BUCKET: files.env.BUCKET,
-    S3_ACCESS_KEY: files.env.ACCESS_KEY_ID,
-    S3_SECRET_KEY: files.env.SECRET_ACCESS_KEY,
-    S3_REGION: files.env.REGION,
+    S3_ENDPOINT: ref(files, "ENDPOINT"),
+    S3_BUCKET: ref(files, "BUCKET"),
+    S3_ACCESS_KEY: ref(files, "ACCESS_KEY_ID"),
+    S3_SECRET_KEY: ref(files, "SECRET_ACCESS_KEY"),
+    S3_REGION: ref(files, "REGION"),
     FILE_RETENTION_DAYS: "180",
     // Secrets: Werte werden im Railway-Dashboard gesetzt und hier nur beibehalten
     APP_SECRET: preserve(),
@@ -96,15 +97,10 @@ export default defineRailway(() => {
     },
   });
 
-  return project("sbc-sourcing-intelligence", {
+  return project("amazon-deal", {
     resources: [
-      db,
-      cache,
-      files,
-      backend,
-      worker,
-      scheduler,
       frontend,
+      // group() liefert die Ressourcen selbst mit – nicht zusätzlich einzeln aufführen
       group("Python", [backend, worker, scheduler]),
       group("Daten", [db, cache, files]),
     ],
