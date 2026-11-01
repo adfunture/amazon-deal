@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -13,18 +12,15 @@ from sbc.api.serialize import row
 from sbc.db import get_db
 from sbc.matching import calibration
 from sbc.matching.engine import Decision
+from sbc.matching.review import apply_review, bulk_confirm_blockers
 from sbc.models import (
-    BundleComponent,
     MatchClass,
-    MatchingFeedback,
+    MarketplaceListing,
     MatchingResult,
-    Opportunity,
-    ProductRelation,
-    RelationType,
     ReviewStatus,
     Role,
+    SupplierOffer,
 )
-from sbc.pipeline import evaluate, upsert_mapping
 
 router = APIRouter(prefix="/matching", tags=["matching"])
 
@@ -60,11 +56,6 @@ def queue(status: ReviewStatus = ReviewStatus.pending, classification: MatchClas
     return {"total": total, "items": [_detail(m) for m in items]}
 
 
-@router.get("/{mid}")
-def get_match(mid: uuid.UUID, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
-    return _detail(_result(db, user, mid))
-
-
 class ReviewIn(BaseModel):
     action: str = Field(pattern="^(confirm|reject|bundle|variant|defer|correct)$")
     classification: MatchClass | None = None
@@ -79,80 +70,184 @@ def review(mid: uuid.UUID, body: ReviewIn, request: Request,
            user: CurrentUser = Depends(require(Role.reviewer)), db: Session = Depends(get_db)):
     """Jede Entscheidung wird als Feedback gespeichert (Label für die Konfidenz-Kalibrierung)."""
     m = _result(db, user, mid)
-    prev_cls, prev_score = m.classification, m.score
-    new_cls = body.classification or m.classification
-    positive: bool | None
-    if body.action == "confirm":
-        status, positive = ReviewStatus.confirmed, True
-    elif body.action == "reject":
-        status, positive, new_cls = ReviewStatus.rejected, False, MatchClass.NO_MATCH
-    elif body.action == "bundle":
-        status, positive, new_cls = ReviewStatus.confirmed, prev_cls == MatchClass.BUNDLE, MatchClass.BUNDLE
-    elif body.action == "variant":
-        status, positive, new_cls = ReviewStatus.confirmed, prev_cls == MatchClass.VARIANT_MATCH, MatchClass.VARIANT_MATCH
-    elif body.action == "defer":
-        status, positive = ReviewStatus.deferred, None
-    else:  # correct
-        status, positive = ReviewStatus.confirmed, new_cls == prev_cls
-    if body.units_required is not None:
-        if body.units_required != m.units_required and positive:
-            positive = False  # Verkaufseinheit war falsch → kein korrektes Match-Label
-        m.units_required = body.units_required
-    if status == ReviewStatus.confirmed and new_cls in (MatchClass.REVIEW_REQUIRED, MatchClass.POSSIBLE_MATCH):
-        new_cls = MatchClass.MULTIPACK if (m.units_required or 1) > 1 else MatchClass.EXACT_MATCH
-
-    m.classification = new_cls
-    m.review_status = status
-    m.reviewed_by = user.id
-    m.reviewed_at = datetime.now(UTC)
-    if status == ReviewStatus.confirmed:
-        m.confidence = max(m.confidence, m.score)
-    m.decision_status = {ReviewStatus.confirmed: Decision.VERIFIED, ReviewStatus.rejected: Decision.NO_MATCH}.get(
-        status, Decision.REVIEW)
-    db.flush()
-    # Dauerhafte Zuordnung Produkt ↔ ASIN: gilt künftig für alle Lieferanten mit demselben Produkt
-    upsert_mapping(db, m, {Decision.VERIFIED: "VERIFIED", Decision.NO_MATCH: "REJECTED"}.get(m.decision_status, "REVIEW"),
-                   "manual", user.id, body.comment)
-    db.add(MatchingFeedback(org_id=user.org_id, matching_result_id=m.id, user_id=user.id,
-                            action=body.action, previous_classification=prev_cls.value,
-                            new_classification=new_cls.value, score_at_review=prev_score,
-                            is_positive=positive, corrections=body.corrections, comment=body.comment))
-
-    o, l = m.supplier_offer, m.listing
-    if status == ReviewStatus.confirmed and o.product_id:
-        rel = {MatchClass.EXACT_MATCH: RelationType.SAME, MatchClass.MULTIPACK: RelationType.MULTIPACK_OF,
-               MatchClass.VARIANT_MATCH: RelationType.VARIANT, MatchClass.BUNDLE: RelationType.BUNDLE_CONTAINS,
-               MatchClass.PACKAGING_DIFFERENCE: RelationType.PACKAGING_VARIANT}.get(new_cls)
-        if rel and new_cls in (MatchClass.EXACT_MATCH,) and l.product_id is None:
-            l.product_id = o.product_id
-        if rel and new_cls != MatchClass.EXACT_MATCH:
-            from sbc.models import Product
-
-            if l.product_id is None:
-                lp = Product(org_id=user.org_id, title=l.title or l.external_id, brand=l.brand, mpn=l.mpn,
-                             unit_quantity=(l.number_of_items or l.package_quantity or 1),
-                             is_bundle=new_cls == MatchClass.BUNDLE)
-                db.add(lp)
-                db.flush()
-                l.product_id = lp.id
-            db.add(ProductRelation(org_id=user.org_id, from_product_id=l.product_id, to_product_id=o.product_id,
-                                   relation_type=rel, quantity=m.units_required,
-                                   evidence={"matching_result_id": str(m.id), "reasoning": m.reasoning},
-                                   confidence=m.confidence, status="confirmed", created_by=user.id))
-            if new_cls in (MatchClass.MULTIPACK, MatchClass.BUNDLE):
-                db.add(BundleComponent(bundle_product_id=l.product_id, component_product_id=o.product_id,
-                                       quantity=m.units_required or 1, preferred_supplier_id=o.supplier_id,
-                                       confirmed=new_cls == MatchClass.MULTIPACK))
+    prev_cls = m.classification
+    opp = apply_review(db, m, body.action, user.id, classification=body.classification,
+                       units_required=body.units_required, comment=body.comment, corrections=body.corrections)
     audit(db, user, "match_reviewed", "matching_result", m.id,
-          {"action": body.action, "from": prev_cls.value, "to": new_cls.value}, request)
-    db.flush()
-    opp = evaluate(db, m) if status != ReviewStatus.rejected else None
-    if status == ReviewStatus.rejected:
-        for o_ in db.scalars(select(Opportunity).where(Opportunity.matching_result_id == m.id)):
-            o_.is_excluded = True
-            o_.exclusion_reasons = ["Match manuell abgelehnt"]
+          {"action": body.action, "from": prev_cls.value, "to": m.classification.value}, request)
     db.commit()
     return {**_detail(m), "opportunity_id": str(opp.id) if opp else None}
+
+
+# --------------------------------------------------------------------------- Prüfung je Lieferantenartikel
+
+
+def _offer(db: Session, user: CurrentUser, oid: uuid.UUID) -> SupplierOffer:
+    o = db.get(SupplierOffer, oid)
+    if o is None or o.org_id != user.org_id:
+        raise HTTPException(404, "Lieferantenartikel nicht gefunden")
+    return o
+
+
+def _offer_view(db: Session, o: SupplierOffer) -> dict:
+    results = list(db.scalars(select(MatchingResult).where(MatchingResult.supplier_offer_id == o.id)
+                              .order_by(MatchingResult.score.desc())))
+    return {
+        "offer": {**row(o, {"raw"}), "supplier_name": o.supplier.name,
+                  "description": o.product.description if o.product else None},
+        "candidates": [{**row(m), "listing": row(m.listing, {"raw"}),
+                        "bulk_blocker": bulk_confirm_blockers(m)} for m in results],
+    }
+
+
+@router.get("/offers")
+def offers_queue(decision: str = Decision.REVIEW, supplier_id: uuid.UUID | None = None, offset: int = 0,
+                 limit: int = 20, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    """Lieferantenartikel mit mindestens einem Kandidaten im gewählten Entscheidungsstatus."""
+    q = (select(MatchingResult.supplier_offer_id, func.max(MatchingResult.score).label("best"))
+         .where(MatchingResult.org_id == user.org_id, MatchingResult.decision_status == decision)
+         .group_by(MatchingResult.supplier_offer_id))
+    if supplier_id:
+        q = q.join(SupplierOffer, SupplierOffer.id == MatchingResult.supplier_offer_id).where(
+            SupplierOffer.supplier_id == supplier_id)
+    sub = q.subquery()
+    total = db.scalar(select(func.count()).select_from(sub))
+    ids = db.execute(select(sub.c.supplier_offer_id).order_by(sub.c.best.desc(), sub.c.supplier_offer_id)
+                     .offset(offset).limit(min(limit, 100))).scalars().all()
+    return {"total": total, "items": [_offer_view(db, db.get(SupplierOffer, i)) for i in ids]}
+
+
+@router.get("/offers/{oid}")
+def offer_detail(oid: uuid.UUID, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    return _offer_view(db, _offer(db, user, oid))
+
+
+class ChooseIn(BaseModel):
+    matching_result_id: uuid.UUID
+    action: str = Field(default="confirm", pattern="^(confirm|variant|bundle)$")
+    units_required: int | None = Field(default=None, ge=1, le=1000)
+    comment: str | None = Field(default=None, max_length=2000)
+    reject_others: bool = True
+
+
+@router.post("/offers/{oid}/choose")
+def choose_candidate(oid: uuid.UUID, body: ChooseIn, request: Request,
+                     user: CurrentUser = Depends(require(Role.reviewer)), db: Session = Depends(get_db)):
+    """Dieser passt: gewählten Kandidaten bestätigen, übrige offene Kandidaten ablehnen."""
+    o = _offer(db, user, oid)
+    chosen = _result(db, user, body.matching_result_id)
+    if chosen.supplier_offer_id != o.id:
+        raise HTTPException(422, "Kandidat gehört nicht zu diesem Lieferantenartikel")
+    apply_review(db, chosen, body.action, user.id, units_required=body.units_required, comment=body.comment)
+    rejected = 0
+    if body.reject_others:
+        for m in db.scalars(select(MatchingResult).where(MatchingResult.supplier_offer_id == o.id,
+                                                         MatchingResult.id != chosen.id,
+                                                         MatchingResult.decision_status == Decision.REVIEW)):
+            apply_review(db, m, "reject", user.id, comment="Anderer Kandidat gewählt")
+            rejected += 1
+    audit(db, user, "match_chosen", "supplier_offer", o.id,
+          {"chosen": str(chosen.id), "action": body.action, "rejected_others": rejected}, request)
+    db.commit()
+    return _offer_view(db, o)
+
+
+class OfferActionIn(BaseModel):
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+@router.post("/offers/{oid}/none")
+def reject_all(oid: uuid.UUID, body: OfferActionIn, request: Request,
+               user: CurrentUser = Depends(require(Role.reviewer)), db: Session = Depends(get_db)):
+    """Keiner passt: alle offenen Kandidaten ablehnen."""
+    o = _offer(db, user, oid)
+    n = 0
+    for m in db.scalars(select(MatchingResult).where(MatchingResult.supplier_offer_id == o.id,
+                                                     MatchingResult.decision_status == Decision.REVIEW)):
+        apply_review(db, m, "reject", user.id, comment=body.comment or "Keiner der Kandidaten passt")
+        n += 1
+    audit(db, user, "match_none", "supplier_offer", o.id, {"rejected": n}, request)
+    db.commit()
+    return _offer_view(db, o)
+
+
+@router.post("/offers/{oid}/defer")
+def defer_offer(oid: uuid.UUID, body: OfferActionIn, user: CurrentUser = Depends(require(Role.reviewer)),
+                db: Session = Depends(get_db)):
+    o = _offer(db, user, oid)
+    for m in db.scalars(select(MatchingResult).where(MatchingResult.supplier_offer_id == o.id,
+                                                     MatchingResult.review_status == ReviewStatus.pending)):
+        apply_review(db, m, "defer", user.id, comment=body.comment)
+    db.commit()
+    return _offer_view(db, o)
+
+
+class AsinIn(BaseModel):
+    asin: str = Field(min_length=10, max_length=10)
+    country: str = Field(default="DE", min_length=2, max_length=2)
+
+
+@router.post("/offers/{oid}/asin")
+def add_asin(oid: uuid.UUID, body: AsinIn, request: Request, user: CurrentUser = Depends(require(Role.reviewer)),
+             db: Session = Depends(get_db)):
+    """Andere ASIN: Listing per Keepa holen (1 Token) und als Kandidat vergleichen – noch ohne Bestätigung."""
+    from sbc.config import get_settings
+    from sbc.domain.identifiers import is_asin
+    from sbc.integrations import keepa as k
+    from sbc.integrations.keepa_service import lookup_asins
+    from sbc.integrations.usage import BudgetExceeded
+    from sbc.pipeline import match_offer
+
+    o = _offer(db, user, oid)
+    asin = body.asin.strip().upper()
+    if not is_asin(asin):
+        raise HTTPException(422, "Ungültige ASIN")
+    country = body.country.upper()
+    listing = db.scalar(select(MarketplaceListing).where(
+        MarketplaceListing.org_id == user.org_id, MarketplaceListing.marketplace == "amazon",
+        MarketplaceListing.country == country, MarketplaceListing.external_id == asin))
+    if listing is None:
+        if not get_settings().keepa_api_key:
+            raise HTTPException(503, "KEEPA_API_KEY nicht konfiguriert")
+        try:
+            found = lookup_asins(db, user.org_id, [asin], country)
+        except (k.KeepaTokensExhausted, BudgetExceeded) as e:
+            raise HTTPException(429, str(e)) from e
+        except k.KeepaError as e:
+            raise HTTPException(502, str(e)) from e
+        listing = found.get(asin)
+        if listing is None:
+            raise HTTPException(404, f"ASIN {asin} bei Keepa nicht gefunden")
+    match_offer(db, o, [listing])
+    audit(db, user, "match_asin_added", "supplier_offer", o.id, {"asin": asin}, request)
+    db.commit()
+    return _offer_view(db, o)
+
+
+class BulkIn(BaseModel):
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
+
+
+@router.post("/bulk-confirm")
+def bulk_confirm(body: BulkIn, request: Request, user: CurrentUser = Depends(require(Role.reviewer)),
+                 db: Session = Depends(get_db)):
+    """Massenfreigabe – nur eindeutige exakte 1:1-Treffer ohne Konflikte; alles andere wird übersprungen."""
+    confirmed, skipped = [], []
+    for mid in body.ids:
+        m = db.get(MatchingResult, mid)
+        if m is None or m.org_id != user.org_id:
+            skipped.append({"id": str(mid), "reason": "nicht gefunden"})
+            continue
+        blocker = bulk_confirm_blockers(m)
+        if blocker:
+            skipped.append({"id": str(mid), "reason": blocker})
+            continue
+        apply_review(db, m, "confirm", user.id, comment="Massenfreigabe")
+        confirmed.append(str(mid))
+    audit(db, user, "match_bulk_confirm", "matching_result", None,
+          {"confirmed": len(confirmed), "skipped": len(skipped)}, request)
+    db.commit()
+    return {"confirmed": confirmed, "skipped": skipped}
 
 
 @router.get("/calibration/report")
@@ -165,3 +260,9 @@ def calibration_report(user: CurrentUser = Depends(current_user), db: Session = 
                               "bins": [b.__dict__ for b in calibration.build_bins(labels)],
                               "min_samples_per_bin": calibration.MIN_SAMPLES}
     return out
+
+
+# Muss zuletzt stehen: sonst würde "/offers" als {mid} interpretiert
+@router.get("/{mid}")
+def get_match(mid: uuid.UUID, user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    return _detail(_result(db, user, mid))

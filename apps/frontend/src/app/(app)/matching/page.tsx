@@ -1,136 +1,213 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { ExternalLink } from "lucide-react";
+import { Gallery } from "@/components/gallery";
 import { Badge, Button, Card, CardHeader, Empty, ErrorBox, Input, Label, PageHeader, Select } from "@/components/ui";
 import { api, qs, useApi } from "@/lib/api";
-import { CONFLICT_LABELS, DECISION_LABELS, DECISION_TONE, MATCH_LABELS, ean, money, percent } from "@/lib/format";
+import { CONFLICT_LABELS, DECISION_LABELS, DECISION_TONE, MATCH_LABELS, dateTime, ean, money, number } from "@/lib/format";
 
-type Match = {
-  id: string; classification: string; score: string; confidence: string; calibrated: boolean; units_required: number | null;
-  stage: string; reasoning: string | null; matched_attributes: Record<string, unknown>; mismatched_attributes: Record<string, unknown>;
-  review_status: string; engine_version: string; model_version: string | null;
-  decision_status: string; score_breakdown: { signal: string; points: number; detail: string }[]; identity_conflicts: string[];
-  supplier_offer: Record<string, any>; listing: Record<string, any>;
+type Candidate = {
+  id: string; classification: string; decision_status: string; review_status: string; score: string; confidence: string;
+  calibrated: boolean; units_required: number | null; stage: string; reasoning: string | null;
+  score_breakdown: { signal: string; points: number; detail: string }[]; identity_conflicts: string[];
+  bulk_blocker: string | null; listing: Record<string, any>;
 };
+type OfferItem = { offer: Record<string, any>; candidates: Candidate[] };
 
-function Side({ title, d, kind }: { title: string; d: Record<string, any>; kind: "offer" | "listing" }) {
-  const img = (d.image_urls ?? [])[0];
-  const rows: [string, React.ReactNode][] = kind === "offer"
-    ? [["Titel", d.title], ["Marke", d.brand], ["EAN", ean(d.gtin)], ["MPN", d.mpn], ["SKU", d.supplier_sku], ["Stück je Einheit", d.unit_quantity],
-       ["Zustand", d.condition], ["EK netto", money(d.unit_price_net, d.currency)], ["Bestand", d.stock_qty ?? "?"], ["Lieferant", d.supplier_name],
-       ["Beschreibung", d.description]]
-    : [["Titel", d.title], ["Marke", d.brand], ["EAN", (d.gtins ?? []).map(ean).join(", ") || "–"], ["MPN / Modell", `${d.mpn ?? "–"} / ${d.model ?? "–"}`],
-       ["ID", `${d.marketplace} ${d.country} ${d.external_id}`], ["Stück je Angebot", d.number_of_items ?? d.package_quantity ?? "–"],
-       ["Preis (brutto)", money(d.buybox_price ?? d.new_price)], ["Kategorie", d.category], ["Quelle", `${d.source}${d.is_test_data ? " (TESTDATEN)" : ""}`]];
+const AMAZON_TLD: Record<string, string> = { DE: "de", FR: "fr", IT: "it", ES: "es", NL: "nl", BE: "com.be", PL: "pl" };
+const PAGE = 20;
+
+function Field({ k, v }: { k: string; v: React.ReactNode }) {
   return (
-    <Card className="flex-1">
-      <CardHeader title={title} />
-      <div className="p-4">
-        <div className="mb-3 flex h-40 items-center justify-center rounded bg-white">
-          {img ? <img src={img} alt="" className="max-h-40 object-contain" /> : <span className="text-xs text-muted">kein Bild</span>}
-        </div>
-        <dl className="space-y-1 text-sm">
-          {rows.map(([k, v]) => (
-            <div key={k} className="grid grid-cols-[130px_1fr] gap-2"><dt className="text-muted">{k}</dt><dd className="break-words">{v ?? "–"}</dd></div>
-          ))}
-        </dl>
+    <div className="grid grid-cols-[120px_1fr] gap-2 text-sm">
+      <dt className="text-muted">{k}</dt>
+      <dd className="break-words">{v ?? "–"}</dd>
+    </div>
+  );
+}
+
+function CandidateCard({ c, onChoose, busy }: { c: Candidate; busy: boolean;
+  onChoose: (c: Candidate, action: "confirm" | "variant" | "bundle", units: number | null) => void }) {
+  const l = c.listing;
+  const [units, setUnits] = useState(c.units_required ? String(c.units_required) : "");
+  const link = l.marketplace === "amazon" ? `https://www.amazon.${AMAZON_TLD[l.country] ?? "de"}/dp/${l.external_id}` : null;
+  const open = c.decision_status === "MANUAL_REVIEW";
+  return (
+    <Card className={c.decision_status === "VERIFIED_MATCH" ? "border-green-300" : c.decision_status === "NO_MATCH" ? "opacity-60" : ""}>
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-2 text-sm">
+        <Badge tone={DECISION_TONE[c.decision_status] ?? "neutral"}>{DECISION_LABELS[c.decision_status]}</Badge>
+        <Badge tone="info">{MATCH_LABELS[c.classification]}</Badge>
+        <span className="font-semibold">{Math.round(Number(c.score) * 100)}/100</span>
+        {c.units_required && c.units_required > 1 && <Badge tone="warn">×{c.units_required} je Angebot</Badge>}
+        {c.identity_conflicts.map((x) => <Badge key={x} tone="bad">{CONFLICT_LABELS[x.replace("mapping:", "")] ?? x}</Badge>)}
+        <span className="ml-auto text-xs text-muted">{c.stage}</span>
       </div>
+      <div className="grid gap-3 p-3 md:grid-cols-[200px_1fr]">
+        <Gallery urls={l.image_urls ?? []} height="h-36" />
+        <div>
+          <div className="mb-1 font-medium">
+            {link ? <a href={link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-accent hover:underline">{l.title} <ExternalLink className="h-3 w-3" /></a> : l.title}
+          </div>
+          <dl className="space-y-0.5">
+            <Field k="ASIN / Land" v={`${l.external_id} · ${l.country}${l.is_test_data ? " · TESTDATEN" : ""}`} />
+            <Field k="Marke" v={l.brand} />
+            <Field k="EAN" v={(l.gtins ?? []).map(ean).join(", ") || "–"} />
+            <Field k="MPN / Modell" v={`${l.mpn ?? "–"} / ${l.model ?? "–"}`} />
+            <Field k="Stück je Angebot" v={l.number_of_items ?? l.package_quantity ?? "–"} />
+            <Field k="Preis brutto" v={`${money(l.buybox_price ?? l.new_price)}${l.buybox_price ? " (Buy Box)" : l.new_price ? " (Neu)" : ""}`} />
+            <Field k="Rank · Anbieter" v={`${number(l.sales_rank)} · ${l.offer_count_new ?? "–"}`} />
+            <Field k="Datenstand" v={`${l.source} · ${dateTime(l.fetched_at)}`} />
+          </dl>
+        </div>
+      </div>
+      {c.score_breakdown.length > 0 && (
+        <div className="flex flex-wrap gap-1 px-3 pb-2 text-xs">
+          {c.score_breakdown.map((b, i) => (
+            <span key={i} className={`rounded px-1.5 py-0.5 ${b.points >= 0 ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>
+              {b.points > 0 ? "+" : ""}{b.points} {b.detail}
+            </span>
+          ))}
+        </div>
+      )}
+      {c.reasoning && <p className="px-3 pb-2 text-xs text-muted">{c.reasoning}</p>}
+      {open && (
+        <div className="flex flex-wrap items-end gap-2 border-t border-border px-3 py-2">
+          <div><Label hint="Lieferanteneinheiten je Angebot">Menge</Label>
+            <Input type="number" min={1} className="w-24" value={units} onChange={(e) => setUnits(e.target.value)} /></div>
+          <Button variant="success" disabled={busy} onClick={() => onChoose(c, "confirm", units ? Number(units) : null)}>Dieser passt</Button>
+          <Button variant="outline" disabled={busy} onClick={() => onChoose(c, "variant", units ? Number(units) : null)}>Variante</Button>
+          <Button variant="outline" disabled={busy} onClick={() => onChoose(c, "bundle", units ? Number(units) : null)}>Bundle</Button>
+        </div>
+      )}
     </Card>
   );
 }
 
 function Review() {
-  const focus = useSearchParams().get("focus");
-  const [status, setStatus] = useState("MANUAL_REVIEW");
-  const [cls, setCls] = useState("");
-  const { data, error, reload } = useApi<{ total: number; items: Match[] }>(`matching/queue${qs({ ...(status.includes("_") ? { decision: status } : { status }), classification: cls, limit: 50 })}`, [status, cls]);
+  const params = useSearchParams();
+  const focusOffer = params.get("offer");
+  const [decision, setDecision] = useState("MANUAL_REVIEW");
+  const [supplierId, setSupplierId] = useState("");
+  const [offset, setOffset] = useState(0);
   const [idx, setIdx] = useState(0);
-  const [units, setUnits] = useState("");
-  const [comment, setComment] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
-  const focused = useApi<Match>(focus ? `matching/${focus}` : null);
-  const m = focus && focused.data ? focused.data : data?.items[idx];
+  const [busy, setBusy] = useState(false);
+  const [asin, setAsin] = useState("");
+  const suppliers = useApi<{ id: string; name: string }[]>("suppliers");
+  const { data, error, reload } = useApi<{ total: number; items: OfferItem[] }>(
+    `matching/offers${qs({ decision, supplier_id: supplierId, offset, limit: PAGE })}`, [decision, supplierId, offset]);
+  const focused = useApi<OfferItem>(focusOffer ? `matching/offers/${focusOffer}` : null);
+  const [override, setOverride] = useState<OfferItem | null>(null);
 
-  useEffect(() => { setUnits(m?.units_required ? String(m.units_required) : ""); setComment(""); }, [m?.id]);
+  const item: OfferItem | undefined = override ?? (focusOffer && focused.data ? focused.data : data?.items[Math.min(idx, (data?.items.length ?? 1) - 1)]);
+  useEffect(() => { setOverride(null); setAsin(""); }, [idx, offset, decision, supplierId]);
 
-  async function decide(action: string) {
-    if (!m) return;
+  const bulkIds = useMemo(() => (data?.items ?? []).flatMap((it) => it.candidates.filter((c) => !c.bulk_blocker).map((c) => c.id)), [data]);
+
+  async function run(fn: () => Promise<OfferItem>, ok: string) {
+    setBusy(true);
+    setMsg(null);
     try {
-      const r = await api<{ opportunity_id: string | null }>(`matching/${m.id}/review`, {
-        method: "POST",
-        body: JSON.stringify({ action, units_required: units ? Number(units) : undefined, comment: comment || undefined }),
-      });
-      setMsg(`Gespeichert (${action})${r.opportunity_id ? " – Opportunity neu bewertet" : ""}`);
-      if (focus) window.history.replaceState(null, "", "/matching");
+      const res = await fn();
+      setMsg(ok);
+      if (res.candidates.some((c) => c.decision_status === "MANUAL_REVIEW")) {
+        setOverride(res); // noch offene Kandidaten (z. B. nach „andere ASIN“) → Artikel bleibt sichtbar
+      } else {
+        setOverride(null);
+        if (focusOffer) window.history.replaceState(null, "", "/matching");
+      }
       reload();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
+  const offerId = item?.offer.id;
+  const choose = (c: Candidate, action: string, units: number | null) => run(
+    () => api<OfferItem>(`matching/offers/${offerId}/choose`, { method: "POST", body: JSON.stringify({ matching_result_id: c.id, action, units_required: units ?? undefined }) }),
+    "Zuordnung gespeichert – gilt künftig für alle Lieferanten mit diesem Produkt");
+  const none = () => run(() => api<OfferItem>(`matching/offers/${offerId}/none`, { method: "POST", body: "{}" }), "Alle Kandidaten abgelehnt");
+  const defer = () => run(() => api<OfferItem>(`matching/offers/${offerId}/defer`, { method: "POST", body: "{}" }), "Zurückgestellt");
+  const addAsin = () => run(() => api<OfferItem>(`matching/offers/${offerId}/asin`, { method: "POST", body: JSON.stringify({ asin: asin.trim().toUpperCase() }) }),
+    "ASIN geladen und verglichen – bitte prüfen und bestätigen");
+  async function bulk() {
+    if (!bulkIds.length || !confirm(`${bulkIds.length} eindeutige exakte Treffer (1:1, ohne Konflikte) auf dieser Seite bestätigen?`)) return;
+    setBusy(true);
+    try {
+      const r = await api<{ confirmed: string[]; skipped: unknown[] }>("matching/bulk-confirm", { method: "POST", body: JSON.stringify({ ids: bulkIds }) });
+      setMsg(`${r.confirmed.length} bestätigt, ${r.skipped.length} übersprungen`);
+      reload();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const o = item?.offer;
+  const pos = offset + idx + 1;
   return (
     <div>
-      <PageHeader title="Product Matching Review" description="Links Lieferant, rechts Marktplatz. Jede Entscheidung wird als Feedback für die Kalibrierung gespeichert."
+      <PageHeader title="Product Matching Review"
+        description="Je Lieferantenartikel alle Amazon-Kandidaten. Jede Entscheidung wird dauerhaft gespeichert und für alle Lieferanten desselben Produkts wiederverwendet."
         actions={<>
-          <Select value={status} onChange={(e) => { setStatus(e.target.value); setIdx(0); }}>
-            <option value="MANUAL_REVIEW">Manuelle Prüfung</option><option value="VERIFIED_MATCH">Verifiziert</option>
-            <option value="NO_MATCH">Kein Match</option><option value="deferred">zurückgestellt</option>
+          <Select value={decision} onChange={(e) => { setDecision(e.target.value); setOffset(0); setIdx(0); }}>
+            <option value="MANUAL_REVIEW">Manuelle Prüfung</option><option value="VERIFIED_MATCH">Verifiziert</option><option value="NO_MATCH">Kein Match</option>
           </Select>
-          <Select value={cls} onChange={(e) => { setCls(e.target.value); setIdx(0); }}>
-            <option value="">alle Klassen</option>{Object.entries(MATCH_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          <Select value={supplierId} onChange={(e) => { setSupplierId(e.target.value); setOffset(0); setIdx(0); }}>
+            <option value="">alle Lieferanten</option>
+            {suppliers.data?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </Select>
+          {decision === "MANUAL_REVIEW" && <Button variant="outline" disabled={busy || !bulkIds.length} onClick={bulk}>Massenfreigabe ({bulkIds.length})</Button>}
         </>} />
       <ErrorBox error={error} />
       {msg && <div className="mb-3 rounded-md bg-accent-soft px-3 py-2 text-sm">{msg}</div>}
-      {!m ? <Card><Empty>Keine Matches in dieser Ansicht.</Empty></Card> : (
+      {!item || !o ? <Card><Empty>Keine Lieferantenartikel in dieser Ansicht.</Empty></Card> : (
         <>
-          <Card className="mb-3 p-3">
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <Badge tone={DECISION_TONE[m.decision_status] ?? "neutral"}>{DECISION_LABELS[m.decision_status] ?? m.decision_status}</Badge>
-              <Badge tone="info">{MATCH_LABELS[m.classification]}</Badge>
-              <span>Score <strong>{Math.round(Number(m.score) * 100)}</strong>/100 · Konfidenz {percent(m.confidence)}{m.calibrated ? "" : " (unkalibriert)"}</span>
-              {m.identity_conflicts?.map((c) => <Badge key={c} tone="bad">Konflikt: {CONFLICT_LABELS[c.replace("mapping:", "")] ?? c}</Badge>)}
-              <span className="text-muted">· Stufe {m.stage} · {m.engine_version}{m.model_version ? ` · ${m.model_version}` : ""}</span>
-              {m.units_required && m.units_required > 1 && <Badge tone="warn">benötigt {m.units_required} Lieferanteneinheiten</Badge>}
-              <div className="flex-1" />
-              {!focus && data && <span className="text-xs text-muted">{idx + 1} / {data.items.length} (gesamt {data.total})</span>}
-            </div>
-            {m.reasoning && <p className="mt-2 text-sm">{m.reasoning}</p>}
-            {m.score_breakdown?.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1 text-xs">
-                {m.score_breakdown.map((b, i) => (
-                  <span key={i} className={`rounded px-1.5 py-0.5 ${b.points >= 0 ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>
-                    {b.points > 0 ? "+" : ""}{b.points} {b.detail}
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="mt-2 grid gap-2 text-xs md:grid-cols-2">
-              <div><span className="font-medium text-success">Übereinstimmend:</span> {Object.entries(m.matched_attributes).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(" · ") || "–"}</div>
-              <div><span className="font-medium text-danger">Abweichend:</span> {Object.entries(m.mismatched_attributes).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(" · ") || "–"}</div>
-            </div>
-          </Card>
-          <div className="flex flex-col gap-3 lg:flex-row">
-            <Side title="Lieferantenprodukt" d={m.supplier_offer} kind="offer" />
-            <Side title="Marktplatzprodukt" d={m.listing} kind="listing" />
+          <div className="mb-3 flex items-center gap-2 text-sm">
+            <Button size="sm" variant="ghost" disabled={busy || pos <= 1}
+              onClick={() => { if (idx > 0) setIdx(idx - 1); else { setOffset(Math.max(offset - PAGE, 0)); setIdx(PAGE - 1); } }}>← Zurück</Button>
+            <span>Artikel {pos} von {data?.total ?? "?"}</span>
+            <Button size="sm" variant="ghost" disabled={busy || !data || pos >= data.total}
+              onClick={() => { if (idx < (data?.items.length ?? 0) - 1) setIdx(idx + 1); else { setOffset(offset + PAGE); setIdx(0); } }}>Weiter →</Button>
           </div>
-          <Card className="mt-3 p-3">
-            <div className="flex flex-wrap items-end gap-2">
-              <div><Label hint="Lieferanteneinheiten je Angebot">Menge</Label><Input type="number" min={1} className="w-28" value={units} onChange={(e) => setUnits(e.target.value)} /></div>
-              <div className="min-w-64 flex-1"><Label>Kommentar</Label><Input value={comment} onChange={(e) => setComment(e.target.value)} /></div>
-              <Button variant="success" onClick={() => decide("confirm")}>Match bestätigen</Button>
-              <Button variant="danger" onClick={() => decide("reject")}>Ablehnen</Button>
-              <Button variant="outline" onClick={() => decide("bundle")}>Als Bundle</Button>
-              <Button variant="outline" onClick={() => decide("variant")}>Variante</Button>
-              <Button variant="outline" onClick={() => decide("defer")}>Zurückstellen</Button>
-              {!focus && <>
-                <Button variant="ghost" disabled={idx === 0} onClick={() => setIdx(idx - 1)}>←</Button>
-                <Button variant="ghost" disabled={!data || idx >= data.items.length - 1} onClick={() => setIdx(idx + 1)}>→</Button>
-              </>}
+          <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
+            <Card className="h-fit lg:sticky lg:top-4">
+              <CardHeader title="Lieferantenartikel" subtitle={o.supplier_name} />
+              <div className="space-y-3 p-3">
+                <Gallery urls={o.image_urls ?? []} />
+                <div className="font-medium">{o.title}</div>
+                <dl className="space-y-0.5">
+                  <Field k="Marke" v={o.brand} /><Field k="EAN" v={ean(o.gtin)} /><Field k="MPN" v={o.mpn} />
+                  <Field k="Artikelnr." v={o.supplier_sku} /><Field k="Stück je Einheit" v={o.unit_quantity} />
+                  <Field k="Zustand" v={o.condition} /><Field k="EK netto" v={money(o.unit_price_net, o.currency)} />
+                  <Field k="Bestand / MOQ" v={`${o.stock_qty ?? "?"} / ${o.moq ?? "–"}`} />
+                  {o.description && <Field k="Beschreibung" v={<span className="text-xs">{o.description}</span>} />}
+                </dl>
+              </div>
+              <div className="space-y-2 border-t border-border p-3">
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="danger" disabled={busy} onClick={none}>Keiner passt</Button>
+                  <Button variant="outline" disabled={busy} onClick={defer}>Zurückstellen</Button>
+                </div>
+                <div className="flex items-end gap-2">
+                  <div className="flex-1"><Label hint="kostet 1 Keepa-Token">Andere ASIN</Label>
+                    <Input value={asin} maxLength={10} placeholder="B0…" onChange={(e) => setAsin(e.target.value)} /></div>
+                  <Button variant="outline" disabled={busy || asin.trim().length !== 10} onClick={addAsin}>Laden</Button>
+                </div>
+              </div>
+            </Card>
+            <div className="space-y-3">
+              {item.candidates.length === 0 && <Card><Empty>Keine Amazon-Kandidaten – andere ASIN eingeben oder „Keiner passt“.</Empty></Card>}
+              {item.candidates.map((c) => <CandidateCard key={c.id} c={c} busy={busy} onChoose={choose} />)}
+              <p className="text-xs text-muted">„Dieser passt“ lehnt die übrigen offenen Kandidaten automatisch ab. Multipacks und Bundles mit der richtigen Menge bestätigen –
+                Einkäufe sind erst nach dieser Freigabe möglich.</p>
             </div>
-            <p className="mt-2 text-xs text-muted">Bundles, Multipacks und Varianten werden nie automatisch eingekauft – erst nach Bestätigung hier.</p>
-          </Card>
+          </div>
         </>
       )}
     </div>

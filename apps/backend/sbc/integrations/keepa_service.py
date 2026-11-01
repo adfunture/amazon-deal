@@ -191,3 +191,30 @@ def lookup_codes(db: Session, org_id, codes: list[str], country: str = "DE",
 
 def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def lookup_asins(db: Session, org_id, asins: list[str], country: str = "DE",
+                 client: KeepaClient | None = None) -> dict[str, MarketplaceListing]:
+    """Listings per ASIN abfragen (1 Token je Produkt, bis 100 je Request) und speichern."""
+    settings = get_settings()
+    client = client or KeepaClient(settings.keepa_api_key)
+    out: dict[str, MarketplaceListing] = {}
+    asins = list(dict.fromkeys(a.strip().upper() for a in asins if a))
+    for i in range(0, len(asins), MAX_CODES_PER_REQUEST):
+        batch = asins[i:i + MAX_CODES_PER_REQUEST]
+        check_budget(db, org_id, "keepa", planned=len(batch))
+        ensure_tokens(len(batch))
+        t0 = time.monotonic()
+        data = client.products(country, asins=batch)
+        if client.last_tokens:
+            save_token_state(client.last_tokens)
+        record_usage(db, org_id=org_id, provider="keepa", endpoint="product_asin",
+                     units=client.last_tokens.tokens_consumed if client.last_tokens else len(batch),
+                     unit_type="keepa_tokens", status_code=200, duration_ms=int((time.monotonic() - t0) * 1000),
+                     items=len(batch), meta={"country": country})
+        for p in data.get("products") or []:
+            if p.get("title") is None and not p.get("eanList"):
+                continue  # Keepa liefert für unbekannte ASINs leere Objekte
+            listing = upsert_listing(db, org_id, parse_product(p, country))
+            out[listing.external_id] = listing
+    return out

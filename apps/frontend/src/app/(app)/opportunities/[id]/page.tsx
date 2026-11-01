@@ -74,7 +74,7 @@ export default function OpportunityDetail({ params }: { params: Promise<{ id: st
         title={d.title}
         description={`${l.marketplace} ${l.country} · ${d.channel} · ASIN/ID ${l.external_id} · EAN ${ean(o.gtin)}`}
         actions={<>
-          <Link href={`/matching?focus=${m?.id ?? ""}`}><Button variant="outline">Manuell prüfen</Button></Link>
+          <Link href={`/matching?offer=${o.id}`}><Button variant="outline">Manuell prüfen</Button></Link>
           <Button variant="outline" onClick={() => action("analyze")}>Detailanalyse</Button>
           <Button variant="outline" onClick={() => action("ignore")}>Ignorieren</Button>
           <Button onClick={() => action("purchase")}>Zur Einkaufsliste</Button>
