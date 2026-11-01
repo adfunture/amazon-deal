@@ -41,3 +41,20 @@ export const MATCH_LABELS: Record<string, string> = {
   NO_MATCH: "Kein Match",
   REVIEW_REQUIRED: "Prüfen",
 };
+
+export const DECISION_LABELS: Record<string, string> = {
+  VERIFIED_MATCH: "Verifiziert",
+  MANUAL_REVIEW: "Manuelle Prüfung",
+  NO_MATCH: "Kein Match",
+};
+
+export const DECISION_TONE: Record<string, "good" | "warn" | "bad"> = {
+  VERIFIED_MATCH: "good",
+  MANUAL_REVIEW: "warn",
+  NO_MATCH: "bad",
+};
+
+export const CONFLICT_LABELS: Record<string, string> = {
+  brand: "Marke", condition: "Zustand", color: "Farbe", size: "Größe", measures: "Maße/Inhalt",
+  unit_quantity: "Verkaufseinheit", identity_changed: "Identität geändert",
+};

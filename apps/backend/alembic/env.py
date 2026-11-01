@@ -19,6 +19,11 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     engine = make_engine(get_settings().database_url)
     with engine.connect() as connection:
+        if connection.dialect.name == "sqlite":
+            # Batch-Migrationen bauen Tabellen neu auf; mit aktiven Fremdschlüsseln würden dabei
+            # abhängige Zeilen per ON DELETE CASCADE gelöscht. (Postgres ist nicht betroffen.)
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata,
                           render_as_batch=connection.dialect.name == "sqlite", compare_type=True)
         with context.begin_transaction():

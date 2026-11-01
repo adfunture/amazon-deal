@@ -101,6 +101,7 @@ def _summary(o: Opportunity) -> dict:
         "competition_score": jsonable(o.competition_score), "match_confidence": jsonable(o.match_confidence),
         "match_class": m.classification.value if m else None,
         "match_status": m.review_status.value if m else None,
+        "match_decision": m.decision_status if m else None,
         "units_required": m.units_required if m else None,
         "stock_qty": off.stock_qty, "coverage": (o.score_breakdown or {}).get("coverage"),
         "missing_costs": (o.score_breakdown or {}).get("missing_costs", []),

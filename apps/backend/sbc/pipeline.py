@@ -18,9 +18,10 @@ from sqlalchemy.orm import Session
 from sbc.domain.identifiers import normalize_mpn
 from sbc.integrations import llm
 from sbc.integrations.usage import BudgetExceeded, check_budget, record_usage
-from sbc.matching import calibration
-from sbc.matching.engine import ENGINE_VERSION, ItemView, compare, requires_review
+from sbc.matching import calibration, identity
+from sbc.matching.engine import ENGINE_VERSION, Decision, ItemView, compare, decide
 from sbc.models import (
+    AsinMapping,
     FeeProfile,
     ListingGtin,
     MarketplaceListing,
@@ -82,43 +83,120 @@ def candidate_listings(db: Session, offer: SupplierOffer, country: str,
     return list(found.values())
 
 
+def _mapping(db: Session, product_id, listing_id) -> AsinMapping | None:
+    if product_id is None:
+        return None
+    return db.scalar(select(AsinMapping).where(AsinMapping.product_id == product_id,
+                                               AsinMapping.listing_id == listing_id))
+
+
+def upsert_mapping(db: Session, mr: MatchingResult, status: str, source: str, user_id=None,
+                   note: str | None = None) -> AsinMapping | None:
+    """Dauerhafte Zuordnung Produkt ↔ ASIN schreiben (VERIFIED | REJECTED | REVIEW)."""
+    offer = mr.supplier_offer
+    if offer.product_id is None:
+        return None
+    m = _mapping(db, offer.product_id, mr.listing_id)
+    if m is None:
+        m = AsinMapping(org_id=mr.org_id, product_id=offer.product_id, listing_id=mr.listing_id,
+                        status=status, relation=mr.classification.value, source=source)
+        db.add(m)
+    m.status = status
+    m.relation = mr.classification.value
+    m.units_required = mr.units_required
+    m.identity_attrs = offer.identity_attrs or {}
+    m.identity_fingerprint = offer.identity_fingerprint
+    m.source = source
+    m.matching_result_id = mr.id
+    m.decided_by = user_id
+    m.decided_at = datetime.now(UTC)
+    m.note = note
+    db.flush()
+    return m
+
+
 def match_offer(db: Session, offer: SupplierOffer, listings: list[MarketplaceListing]) -> list[MatchingResult]:
+    """Matching je Kandidat in Stufen: 1 bekannte Zuordnung → 2–4 Regeln (Identifikatoren, Marke/Modell,
+    Titel/Attribute). Stufe 5/6 (Bild/KI) folgt in ``maybe_ai_review`` nur bei Bedarf."""
     thresholds = get_setting(db, offer.org_id, "thresholds")
     min_conf = Decimal(str(thresholds["min_match_confidence"]))
+    auto_min = int(thresholds.get("auto_verify_min_score", 95))
+    identity_diff, identity_changed = identity.refresh(offer)
     results = []
     sv = offer_view(offer)
     for listing in listings:
         outcome = compare(sv, listing_view(listing))
         mr = db.scalar(select(MatchingResult).where(MatchingResult.supplier_offer_id == offer.id,
                                                     MatchingResult.listing_id == listing.id))
-        if mr is not None and mr.review_status in (ReviewStatus.confirmed, ReviewStatus.rejected):
+        manual = mr is not None and mr.review_status in (ReviewStatus.confirmed, ReviewStatus.rejected)
+        if manual and not identity_changed:
             results.append(mr)  # manuelle Entscheidungen werden nicht überschrieben
             continue
-        bins = calibration.build_bins(calibration.load_labels(db, offer.org_id, outcome.classification.value))
-        conf, calibrated = calibration.calibrate(outcome.score, bins)
         if mr is None:
             mr = MatchingResult(org_id=offer.org_id, supplier_offer_id=offer.id, listing_id=listing.id,
                                 engine_version=ENGINE_VERSION, score=D0, confidence=D0,
                                 classification=outcome.classification, stage=outcome.stage)
             db.add(mr)
-        mr.classification = outcome.classification
         mr.score = outcome.score
-        mr.confidence = conf
-        mr.calibrated = calibrated
-        mr.units_required = outcome.units_required
-        mr.stage = outcome.stage
+        mr.score_breakdown = outcome.breakdown
         mr.matched_attributes = outcome.matched
         mr.mismatched_attributes = outcome.mismatched
-        mr.reasoning = outcome.reasoning
         mr.sources = [f"supplier_offer:{offer.id}", f"{listing.source}:{listing.external_id}"]
         mr.engine_version = ENGINE_VERSION
         mr.model_version = None
-        mr.review_status = (ReviewStatus.pending if requires_review(outcome.classification, conf, min_conf)
-                            else ReviewStatus.auto_accepted)
-        if outcome.classification == MatchClass.NO_MATCH:
+        mr.reviewed_by = None
+        mr.reviewed_at = None
+        mapping = _mapping(db, offer.product_id, listing.id)
+        mapping_conflicts = identity.conflicts(mapping.identity_attrs or {}, offer.identity_attrs or {}) if mapping else []
+
+        if identity_changed:
+            # Stufe 1 entfällt: Identitätsmerkmale des Angebots haben sich geändert → Neuprüfung
+            mr.classification = outcome.classification
+            mr.units_required = outcome.units_required
+            mr.confidence, mr.calibrated = outcome.score, False
+            mr.stage = outcome.stage
+            mr.identity_conflicts = sorted({*outcome.conflicts, "identity_changed"})
+            mr.reasoning = f"Identitätsmerkmale geändert ({', '.join(identity_diff)}) – erneute Prüfung nötig; {outcome.reasoning}"
+            mr.decision_status = Decision.NO_MATCH if outcome.classification == MatchClass.NO_MATCH else Decision.REVIEW
+            mr.review_status = ReviewStatus.pending if mr.decision_status == Decision.REVIEW else ReviewStatus.auto_accepted
+            if mapping is not None and mapping.status != "REJECTED":
+                mapping.status = "REVIEW"
+                mapping.note = "Identitätsmerkmale eines Lieferantenangebots geändert"
+            mr._needs_ai = outcome.needs_ai  # type: ignore[attr-defined]
+        elif mapping is not None and mapping.status in ("VERIFIED", "REJECTED") and not mapping_conflicts:
+            # Stufe 1: bekannte Zuordnung wiederverwenden (kein KI-Aufruf, keine Neuprüfung)
+            verified = mapping.status == "VERIFIED"
+            mr.classification = MatchClass(mapping.relation) if verified else MatchClass.NO_MATCH
+            mr.units_required = mapping.units_required if verified else outcome.units_required
+            mr.confidence, mr.calibrated = Decimal("1") if verified else D0, False
+            mr.stage = "known_mapping"
+            mr.identity_conflicts = []
+            when = f", {mapping.decided_at:%d.%m.%Y}" if mapping.decided_at else ""
+            mr.reasoning = ("Bekannte Zuordnung wiederverwendet" if verified else "Zuordnung früher abgelehnt") + \
+                f" ({mapping.source}{when})"
+            mr.decision_status = Decision.VERIFIED if verified else Decision.NO_MATCH
             mr.review_status = ReviewStatus.auto_accepted
+            mr._needs_ai = False  # type: ignore[attr-defined]
+        else:
+            # Stufen 2–4: Regeln
+            bins = calibration.build_bins(calibration.load_labels(db, offer.org_id, outcome.classification.value))
+            conf, calibrated = calibration.calibrate(outcome.score, bins)
+            mr.classification = outcome.classification
+            mr.units_required = outcome.units_required
+            mr.confidence, mr.calibrated = conf, calibrated
+            mr.stage = outcome.stage
+            mr.identity_conflicts = sorted({*outcome.conflicts, *(f"mapping:{c}" for c in mapping_conflicts)})
+            mr.reasoning = outcome.reasoning
+            decision = decide(outcome, conf, calibrated, min_conf, auto_min)
+            if mapping_conflicts and decision == Decision.VERIFIED:
+                decision = Decision.REVIEW  # widerspricht einer bestehenden Zuordnung
+            mr.decision_status = decision
+            mr.review_status = ReviewStatus.pending if decision == Decision.REVIEW else ReviewStatus.auto_accepted
+            db.flush()
+            if decision == Decision.VERIFIED:
+                upsert_mapping(db, mr, "VERIFIED", "auto")
+            mr._needs_ai = outcome.needs_ai  # type: ignore[attr-defined]
         db.flush()
-        mr._needs_ai = outcome.needs_ai  # type: ignore[attr-defined]
         mr._outcome = outcome  # type: ignore[attr-defined]
         results.append(mr)
     return results
@@ -164,6 +242,7 @@ def maybe_ai_review(db: Session, mr: MatchingResult, use_images: bool = True) ->
     mr.reasoning = new.reasoning
     mr.model_version = meta["model"]
     mr.review_status = ReviewStatus.pending  # KI-Ergebnisse immer manuell bestätigen
+    mr.decision_status = Decision.NO_MATCH if new.classification == MatchClass.NO_MATCH else Decision.REVIEW
     db.flush()
     return True
 
@@ -278,7 +357,7 @@ def evaluate(db: Session, mr: MatchingResult, channel: str | None = None) -> Opp
         contribution_per_1000_month=cap.contribution_per_1000_per_month if cap else None,
         stock_qty=offer.stock_qty, moq=offer.moq, lead_time_days=offer.lead_time_days,
         supplier_rating=supplier.rating, match_class=mr.classification, match_confidence=mr.confidence,
-        match_confirmed=mr.review_status == ReviewStatus.confirmed, units_required=mr.units_required,
+        match_confirmed=mr.decision_status == Decision.VERIFIED, units_required=mr.units_required,
         condition=offer.condition, restricted=bool(offer.product and offer.product.restricted),
         calc_complete=main.is_complete,
     ), get_setting(db, offer.org_id, "score_weights"), thresholds)

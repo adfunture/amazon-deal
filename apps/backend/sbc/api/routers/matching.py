@@ -12,17 +12,19 @@ from sbc.api.deps import CurrentUser, audit, current_user, require
 from sbc.api.serialize import row
 from sbc.db import get_db
 from sbc.matching import calibration
+from sbc.matching.engine import Decision
 from sbc.models import (
     BundleComponent,
     MatchClass,
     MatchingFeedback,
     MatchingResult,
+    Opportunity,
     ProductRelation,
     RelationType,
     ReviewStatus,
     Role,
 )
-from sbc.pipeline import evaluate
+from sbc.pipeline import evaluate, upsert_mapping
 
 router = APIRouter(prefix="/matching", tags=["matching"])
 
@@ -46,10 +48,11 @@ def _detail(m: MatchingResult) -> dict:
 
 @router.get("/queue")
 def queue(status: ReviewStatus = ReviewStatus.pending, classification: MatchClass | None = None,
-          offset: int = 0, limit: int = 50, user: CurrentUser = Depends(current_user),
-          db: Session = Depends(get_db)):
-    q = select(MatchingResult).where(MatchingResult.org_id == user.org_id,
-                                     MatchingResult.review_status == status)
+          decision: str | None = None, offset: int = 0, limit: int = 50,
+          user: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
+    """Prüfwarteschlange. ``decision`` (VERIFIED_MATCH|MANUAL_REVIEW|NO_MATCH) hat Vorrang vor ``status``."""
+    q = select(MatchingResult).where(MatchingResult.org_id == user.org_id)
+    q = q.where(MatchingResult.decision_status == decision) if decision else q.where(MatchingResult.review_status == status)
     if classification:
         q = q.where(MatchingResult.classification == classification)
     total = db.scalar(select(func.count()).select_from(q.subquery()))
@@ -104,6 +107,12 @@ def review(mid: uuid.UUID, body: ReviewIn, request: Request,
     m.reviewed_at = datetime.now(UTC)
     if status == ReviewStatus.confirmed:
         m.confidence = max(m.confidence, m.score)
+    m.decision_status = {ReviewStatus.confirmed: Decision.VERIFIED, ReviewStatus.rejected: Decision.NO_MATCH}.get(
+        status, Decision.REVIEW)
+    db.flush()
+    # Dauerhafte Zuordnung Produkt ↔ ASIN: gilt künftig für alle Lieferanten mit demselben Produkt
+    upsert_mapping(db, m, {Decision.VERIFIED: "VERIFIED", Decision.NO_MATCH: "REJECTED"}.get(m.decision_status, "REVIEW"),
+                   "manual", user.id, body.comment)
     db.add(MatchingFeedback(org_id=user.org_id, matching_result_id=m.id, user_id=user.id,
                             action=body.action, previous_classification=prev_cls.value,
                             new_classification=new_cls.value, score_at_review=prev_score,
@@ -138,6 +147,10 @@ def review(mid: uuid.UUID, body: ReviewIn, request: Request,
           {"action": body.action, "from": prev_cls.value, "to": new_cls.value}, request)
     db.flush()
     opp = evaluate(db, m) if status != ReviewStatus.rejected else None
+    if status == ReviewStatus.rejected:
+        for o_ in db.scalars(select(Opportunity).where(Opportunity.matching_result_id == m.id)):
+            o_.is_excluded = True
+            o_.exclusion_reasons = ["Match manuell abgelehnt"]
     db.commit()
     return {**_detail(m), "opportunity_id": str(opp.id) if opp else None}
 

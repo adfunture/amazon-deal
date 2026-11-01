@@ -8,14 +8,14 @@ import {
 import { ArrowDown, ArrowUp, Download } from "lucide-react";
 import { Badge, Button, Card, Empty, ErrorBox, Input, Label, Select, TestDataBanner } from "@/components/ui";
 import { api, qs, useApi } from "@/lib/api";
-import { MATCH_LABELS, dateTime, ean, money, number, percent } from "@/lib/format";
+import { DECISION_LABELS, DECISION_TONE, MATCH_LABELS, dateTime, ean, money, number, percent } from "@/lib/format";
 
 export type Opp = {
   id: string; status: string; channel: string; score: string | null; is_excluded: boolean; exclusion_reasons: string[];
   is_test_data: boolean; image: string | null; title: string; brand: string | null; gtin: string | null; asin: string | null;
   supplier: string; buy_price_net: string | null; sell_price_gross: string | null; contribution: string | null;
   contribution_margin: string | null; roi: string | null; demand_score: string | null; competition_score: string | null;
-  match_confidence: string | null; match_class: string | null; match_status: string | null; units_required: number | null;
+  match_confidence: string | null; match_class: string | null; match_status: string | null; match_decision: string | null; units_required: number | null;
   coverage: number | null; missing_costs: string[]; updated_at: string; country: string; currency: string;
 };
 
@@ -102,7 +102,8 @@ export function OpportunityTable({ bundleOnly = false }: { bundleOnly?: boolean 
       cell: ({ row: { original: o } }) => (
         <div className="text-xs">
           <div>{o.match_class ? MATCH_LABELS[o.match_class] : "–"}{o.units_required && o.units_required > 1 ? ` ×${o.units_required}` : ""}</div>
-          <div className="text-muted">{percent(o.match_confidence)} · {o.match_status}</div>
+          {o.match_decision && <Badge tone={DECISION_TONE[o.match_decision] ?? "neutral"}>{DECISION_LABELS[o.match_decision]}</Badge>}
+          <div className="text-muted">{percent(o.match_confidence)}</div>
         </div>
       ),
     }),

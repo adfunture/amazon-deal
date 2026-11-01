@@ -17,6 +17,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "min_contribution": "5.00",
         "max_test_purchase": "1000.00",
         "min_match_confidence": "0.95",
+        "auto_verify_min_score": 95,  # ohne Kalibrierung: Punktscore für automatische Bestätigung
         "allowed_conditions": ["new"],
         "require_stock": True,
     },

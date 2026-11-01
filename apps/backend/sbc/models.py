@@ -451,6 +451,9 @@ class SupplierOffer(Base):
     is_current: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     content_hash: Mapped[str] = mapped_column(String(64))
     raw: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+    # Identitätskritische Merkmale (GTIN, MPN, Marke, VPE, Zustand, Farbe, Größe, Maße) – Änderung ⇒ Neuprüfung
+    identity_attrs: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, server_default="{}")
+    identity_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_price_change_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -641,6 +644,11 @@ class MatchingResult(Base, TimestampMixin):
     review_status: Mapped[ReviewStatus] = mapped_column(
         _enum(ReviewStatus, "review_status"), default=ReviewStatus.pending, index=True
     )
+    # VERIFIED_MATCH | MANUAL_REVIEW | NO_MATCH (Beziehungsart bleibt in ``classification``)
+    decision_status: Mapped[str] = mapped_column(String(20), default="MANUAL_REVIEW",
+                                                 server_default="MANUAL_REVIEW", index=True)
+    score_breakdown: Mapped[list[Any]] = mapped_column(JSONType, default=list, server_default="[]")
+    identity_conflicts: Mapped[list[Any]] = mapped_column(JSONType, default=list, server_default="[]")
     reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -664,6 +672,35 @@ class MatchingFeedback(Base):
     corrections: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     comment: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AsinMapping(Base, TimestampMixin):
+    """Dauerhafte Zuordnung Produkt (Verkaufseinheit) ↔ Marktplatz-Listing (ASIN je Land).
+
+    Wird von allen Lieferantenangeboten desselben Produkts wiederverwendet. ``identity_attrs`` hält
+    die Merkmale zum Entscheidungszeitpunkt; weicht ein Angebot davon ab, wird neu geprüft.
+    """
+
+    __tablename__ = "asin_mappings"
+    __table_args__ = (UniqueConstraint("product_id", "listing_id"),)
+    id: Mapped[uuid.UUID] = _pk()
+    org_id: Mapped[uuid.UUID] = _org_fk()
+    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), index=True)
+    listing_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("marketplace_listings.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(20), index=True)  # VERIFIED | REJECTED | REVIEW
+    relation: Mapped[str] = mapped_column(String(30))  # MatchClass-Wert
+    units_required: Mapped[int | None] = mapped_column(Integer)
+    identity_attrs: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+    identity_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(20))  # manual | auto
+    matching_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("matching_results.id", ondelete="SET NULL")
+    )
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(Text)
 
 
 # --------------------------------------------------------------------------- Profit & Opportunities

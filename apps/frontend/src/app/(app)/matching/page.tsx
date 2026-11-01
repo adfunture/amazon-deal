@@ -4,12 +4,13 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Badge, Button, Card, CardHeader, Empty, ErrorBox, Input, Label, PageHeader, Select } from "@/components/ui";
 import { api, qs, useApi } from "@/lib/api";
-import { MATCH_LABELS, ean, money, percent } from "@/lib/format";
+import { CONFLICT_LABELS, DECISION_LABELS, DECISION_TONE, MATCH_LABELS, ean, money, percent } from "@/lib/format";
 
 type Match = {
   id: string; classification: string; score: string; confidence: string; calibrated: boolean; units_required: number | null;
   stage: string; reasoning: string | null; matched_attributes: Record<string, unknown>; mismatched_attributes: Record<string, unknown>;
   review_status: string; engine_version: string; model_version: string | null;
+  decision_status: string; score_breakdown: { signal: string; points: number; detail: string }[]; identity_conflicts: string[];
   supplier_offer: Record<string, any>; listing: Record<string, any>;
 };
 
@@ -41,9 +42,9 @@ function Side({ title, d, kind }: { title: string; d: Record<string, any>; kind:
 
 function Review() {
   const focus = useSearchParams().get("focus");
-  const [status, setStatus] = useState("pending");
+  const [status, setStatus] = useState("MANUAL_REVIEW");
   const [cls, setCls] = useState("");
-  const { data, error, reload } = useApi<{ total: number; items: Match[] }>(`matching/queue${qs({ status, classification: cls, limit: 50 })}`, [status, cls]);
+  const { data, error, reload } = useApi<{ total: number; items: Match[] }>(`matching/queue${qs({ ...(status.includes("_") ? { decision: status } : { status }), classification: cls, limit: 50 })}`, [status, cls]);
   const [idx, setIdx] = useState(0);
   const [units, setUnits] = useState("");
   const [comment, setComment] = useState("");
@@ -73,8 +74,8 @@ function Review() {
       <PageHeader title="Product Matching Review" description="Links Lieferant, rechts Marktplatz. Jede Entscheidung wird als Feedback für die Kalibrierung gespeichert."
         actions={<>
           <Select value={status} onChange={(e) => { setStatus(e.target.value); setIdx(0); }}>
-            <option value="pending">offen</option><option value="deferred">zurückgestellt</option><option value="auto_accepted">automatisch akzeptiert</option>
-            <option value="confirmed">bestätigt</option><option value="rejected">abgelehnt</option>
+            <option value="MANUAL_REVIEW">Manuelle Prüfung</option><option value="VERIFIED_MATCH">Verifiziert</option>
+            <option value="NO_MATCH">Kein Match</option><option value="deferred">zurückgestellt</option>
           </Select>
           <Select value={cls} onChange={(e) => { setCls(e.target.value); setIdx(0); }}>
             <option value="">alle Klassen</option>{Object.entries(MATCH_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -86,14 +87,25 @@ function Review() {
         <>
           <Card className="mb-3 p-3">
             <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Badge tone={DECISION_TONE[m.decision_status] ?? "neutral"}>{DECISION_LABELS[m.decision_status] ?? m.decision_status}</Badge>
               <Badge tone="info">{MATCH_LABELS[m.classification]}</Badge>
-              <span>Score {percent(m.score)} · Konfidenz {percent(m.confidence)}{m.calibrated ? "" : " (unkalibriert)"}</span>
+              <span>Score <strong>{Math.round(Number(m.score) * 100)}</strong>/100 · Konfidenz {percent(m.confidence)}{m.calibrated ? "" : " (unkalibriert)"}</span>
+              {m.identity_conflicts?.map((c) => <Badge key={c} tone="bad">Konflikt: {CONFLICT_LABELS[c.replace("mapping:", "")] ?? c}</Badge>)}
               <span className="text-muted">· Stufe {m.stage} · {m.engine_version}{m.model_version ? ` · ${m.model_version}` : ""}</span>
               {m.units_required && m.units_required > 1 && <Badge tone="warn">benötigt {m.units_required} Lieferanteneinheiten</Badge>}
               <div className="flex-1" />
               {!focus && data && <span className="text-xs text-muted">{idx + 1} / {data.items.length} (gesamt {data.total})</span>}
             </div>
             {m.reasoning && <p className="mt-2 text-sm">{m.reasoning}</p>}
+            {m.score_breakdown?.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1 text-xs">
+                {m.score_breakdown.map((b, i) => (
+                  <span key={i} className={`rounded px-1.5 py-0.5 ${b.points >= 0 ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>
+                    {b.points > 0 ? "+" : ""}{b.points} {b.detail}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="mt-2 grid gap-2 text-xs md:grid-cols-2">
               <div><span className="font-medium text-success">Übereinstimmend:</span> {Object.entries(m.matched_attributes).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(" · ") || "–"}</div>
               <div><span className="font-medium text-danger">Abweichend:</span> {Object.entries(m.mismatched_attributes).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(" · ") || "–"}</div>

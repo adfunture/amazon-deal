@@ -50,9 +50,35 @@ _COLORS = {
     "rojo": "red", "rouge": "red", "rosso": "red", "azul": "blue", "bleu": "blue", "blu": "blue",
     "verde": "green", "vert": "green", "amarillo": "yellow", "jaune": "yellow", "giallo": "yellow",
     "gris": "grey", "grigio": "grey", "plata": "silver", "argent": "silver", "argento": "silver",
-    "rosa": "pink", "rose": "pink", "marrón": "brown", "marron": "brown", "marrone": "brown",
+    "rose": "pink", "marrón": "brown", "marron": "brown", "marrone": "brown",
     "naranja": "orange", "arancione": "orange", "morado": "purple", "violet": "purple", "viola": "purple",
 }
+
+
+# Größen: XS/XL/XXL… immer; S/M/L nur nach Größen-Schlüsselwort (sonst Verwechslung mit Meter/Liter)
+_SIZE_KEYWORD = r"(?:größe|groesse|gr\.?|size|taille|taglia|talla|maat|rozmiar|eu)"
+_SIZE_LETTER = re.compile(r"(?<![\w-])(\d?x{0,3}[sl]|xxs|xs|[2-5]xl)(?![\w-])", re.I)
+_SIZE_WITH_KEYWORD = re.compile(_SIZE_KEYWORD + r"\s*:?\s*(\d{1,3}(?:[.,/]\d{1,2})?|x{0,3}[sml]|[2-5]xl)(?![\w])", re.I)
+
+
+def _norm_size(raw: str) -> str:
+    r = raw.upper().replace(",", ".")
+    m = re.fullmatch(r"([2-5])XL", r)
+    if m:
+        return "X" * int(m.group(1)) + "L"
+    return r
+
+
+def extract_sizes(title: str | None) -> set[str]:
+    if not title:
+        return set()
+    sizes = {_norm_size(m.group(1)) for m in _SIZE_WITH_KEYWORD.finditer(title)}
+    for m in _SIZE_LETTER.finditer(title):
+        tok = m.group(1)
+        if tok.upper() in {"S", "L"}:  # nackte S/L nur mit Schlüsselwort (siehe oben)
+            continue
+        sizes.add(_norm_size(tok))
+    return sizes
 
 
 def normalize_text(s: str | None) -> str:
@@ -70,6 +96,7 @@ class TitleAttributes:
     bundle_hint: bool = False
     measures: set[str] = field(default_factory=set)
     colors: set[str] = field(default_factory=set)
+    sizes: set[str] = field(default_factory=set)
     model_tokens: set[str] = field(default_factory=set)
 
     def as_dict(self) -> dict:
@@ -79,6 +106,7 @@ class TitleAttributes:
             "bundle_hint": self.bundle_hint,
             "measures": sorted(self.measures),
             "colors": sorted(self.colors),
+            "sizes": sorted(self.sizes),
             "model_tokens": sorted(self.model_tokens),
         }
 
@@ -114,9 +142,11 @@ def extract_attributes(title: str | None, brand: str | None = None) -> TitleAttr
     for word in re.findall(r"[a-zäöüß]+", norm):
         if word in _COLORS:
             attrs.colors.add(_COLORS[word])
+    attrs.sizes = extract_sizes(title)
     brand_up = (brand or "").upper()
     for tok in _MODEL_TOKEN.findall(title.upper()):
         tok = tok.strip("-/.")
-        if len(tok) >= 3 and tok != brand_up and not re.fullmatch(r"\d+(ER|X|PCS|STK|ML|MM|CM|G|KG|L|W|V)", tok):
+        if (len(tok) >= 3 and tok != brand_up and not re.fullmatch(r"\d+(ER|X|PCS|STK|ML|MM|CM|G|KG|L|W|V)", tok)
+                and not re.fullmatch(r"[2-5]XL|X{1,3}[SL]", tok)):
             attrs.model_tokens.add(re.sub(r"[\-/.]", "", tok))
     return attrs

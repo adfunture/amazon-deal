@@ -163,11 +163,13 @@ def score(si: ScoreInputs, weights: dict[str, str], thresholds: dict) -> dict:
             reasons.append(f"DB-Marge unter {min_margin:.0%}")
     if si.match_class in (None, MatchClass.NO_MATCH):
         reasons.append("Kein Produktmatch")
-    elif not si.match_confirmed:
-        if si.match_class not in (MatchClass.EXACT_MATCH, MatchClass.MULTIPACK):
+    elif not si.match_confirmed:  # = Entscheidungsstatus nicht VERIFIED_MATCH
+        if si.match_class not in (MatchClass.EXACT_MATCH,):
             reasons.append(f"Match ungeklärt ({si.match_class.value}) – manuelle Prüfung nötig")
         elif (si.match_confidence or 0) < min_conf:
-            reasons.append(f"Matching-Konfidenz unter {min_conf:.0%}")
+            reasons.append(f"Matching-Konfidenz unter {min_conf:.0%} – manuelle Prüfung nötig")
+        else:
+            reasons.append("Match nicht verifiziert – manuelle Prüfung nötig")
     if si.units_required is None:
         reasons.append("Unklare Verkaufseinheit")
     if thresholds.get("require_stock", True) and si.stock_qty == 0:

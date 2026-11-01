@@ -14,7 +14,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from sbc.models import MatchClass, Opportunity, PurchaseRecommendation, ReviewStatus
+from sbc.models import MatchClass, Opportunity, PurchaseRecommendation
 from sbc.settings_store import get_setting
 
 
@@ -22,10 +22,9 @@ def propose(db: Session, o: Opportunity, kind: str, quantity: int | None, thresh
     m = o.matching_result
     if m is None or m.classification == MatchClass.NO_MATCH:
         raise ValueError("Kein Match")
-    if m.review_status != ReviewStatus.confirmed and (
-        m.classification not in (MatchClass.EXACT_MATCH,) or m.review_status != ReviewStatus.auto_accepted
-    ):
-        raise ValueError("Match ist nicht manuell bestätigt (bei Bundles/Multipacks/Varianten Pflicht)")
+    if m.decision_status != "VERIFIED_MATCH":
+        raise ValueError("Match ist nicht verifiziert bzw. nicht manuell bestätigt "
+                         "(bei Bundles/Multipacks/Varianten Pflicht)")
     if o.contribution is None:
         raise ValueError("Kalkulation unvollständig")
     offer = o.supplier_offer
