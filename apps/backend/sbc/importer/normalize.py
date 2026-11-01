@@ -133,18 +133,18 @@ def normalize_row(raw: dict[str, object], mapping: dict[str, str], opts: ImportO
         o.gtin, err = normalize_gtin(v)
         if err:
             o.warnings.append(f"EAN '{o.gtin_raw}': {err}")
-    o.supplier_sku = _sku(values.get("supplier_sku"))
-    o.mpn = _sku(values.get("mpn"))
+    o.supplier_sku = _clip(_sku(values.get("supplier_sku")), 200, o)
+    o.mpn = _clip(_sku(values.get("mpn")), 200, o)
     if o.mpn is None and opts.sku_is_mpn:
         o.mpn = o.supplier_sku
     o.mpn_normalized = normalize_mpn(o.mpn)
     if (a := _str(values.get("asin"))) and is_asin(a):
         o.asin = a.upper()
 
-    o.brand = _str(values.get("brand"))
-    o.title = _str(values.get("title"))
+    o.brand = _clip(_str(values.get("brand")), 200, o)
+    o.title = _clip(_str(values.get("title")), 500, o)
     o.description = _str(values.get("description"))
-    o.category = _str(values.get("category"))
+    o.category = _clip(_str(values.get("category")), 300, o)
     o.color = _str(values.get("color"))
     o.size = _str(values.get("size"))
     if (c := _str(values.get("condition"))) is not None:
@@ -230,6 +230,8 @@ def normalize_row(raw: dict[str, object], mapping: dict[str, str], opts: ImportO
     brand_key = re.sub(r"[^A-Z0-9]", "", (o.brand or "").upper())
     base_key = o.supplier_sku or o.gtin or (o.mpn_normalized and f"MPN:{o.mpn_normalized}")
     o.offer_key = f"{brand_key}|{base_key}" if base_key and brand_key and not (base_key == o.gtin) else base_key
+    if o.offer_key and len(o.offer_key) > 200:  # stabil kürzen (Hash statt Abschneiden → keine Kollision)
+        o.offer_key = o.offer_key[:150] + "#" + hashlib.sha256(o.offer_key.encode()).hexdigest()[:40]
     if not o.offer_key:
         o.errors.append("Keine Artikelnummer, EAN oder MPN – Zeile nicht zuordenbar")
     if o.unit_price_net is None and not any(e.startswith(("Einkaufspreis", "Brutto", "Gewählte")) for e in o.errors):
@@ -237,6 +239,14 @@ def normalize_row(raw: dict[str, object], mapping: dict[str, str], opts: ImportO
     if not o.title and not o.gtin and not o.mpn:
         o.warnings.append("Weder Titel noch EAN/MPN – Matching kaum möglich")
     return o
+
+
+def _clip(v: str | None, n: int, o: NormalizedOffer) -> str | None:
+    """Text auf Spaltenlänge kürzen und als Warnung vermerken (statt Datenbankfehler)."""
+    if v is not None and len(v) > n:
+        o.warnings.append(f"Text auf {n} Zeichen gekürzt: {v[:40]}…")
+        return v[: n - 1] + "…"
+    return v
 
 
 def _parse_stock(v: object) -> int | None:

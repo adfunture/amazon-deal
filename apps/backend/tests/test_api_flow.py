@@ -283,3 +283,21 @@ def test_bootstrap_creates_missing_admin_and_never_resets(db, org, monkeypatch, 
     admin = db.query(User).filter_by(email="chef@test.de").one()
     assert admin.role == Role.admin and verify_password("Langes-Passwort-1", admin.password_hash)
     get_settings.cache_clear()
+
+
+def test_import_long_texts_and_price_change_source(client, db):
+    """Überlange Lieferantentexte werden gekürzt statt den Import abzubrechen (Postgres prüft Längen)."""
+    from sbc.models import PriceHistory
+
+    sid = _supplier(client, "LONG")
+    long_title = "Sehr langer Artikeltitel " * 40  # ~1000 Zeichen
+    long_sku = "SKU-" + "X" * 250
+    rows = [["SKU", "Name", "Marke", "EK"], [long_sku, long_title, "M" * 250, "3,60"]]
+    job = _upload(client, sid, _xlsx(rows)).json()
+    client.put(f"/api/v1/imports/{job['id']}/mapping", json={"mapping": job["column_mapping"]})
+    j = process_job(db, job["id"])
+    assert j.status == ImportStatus.completed, j.error
+    o = db.query(SupplierOffer).filter(SupplierOffer.supplier_id == j.supplier_id).one()
+    assert len(o.title) <= 500 and len(o.brand) <= 200 and len(o.offer_key) <= 200 and len(o.supplier_sku) <= 200
+    ph = db.query(PriceHistory).filter_by(subject_id=o.id).one()
+    assert ph.source == f"import:{j.id}" and len(ph.source) > 30

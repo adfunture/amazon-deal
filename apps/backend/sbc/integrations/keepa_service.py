@@ -79,6 +79,11 @@ def upsert_listing(db: Session, org_id, kl: KeepaListing, is_test_data: bool = F
                  "sales_rank", "sales_rank_drops30", "sales_rank_drops90", "monthly_sold",
                  "offer_count_new", "amazon_is_seller"):
         setattr(listing, attr, getattr(kl, attr))
+    for attr, n in (("title", 1000), ("brand", 200), ("manufacturer", 200), ("model", 200), ("mpn", 200),
+                    ("category", 500)):
+        v = getattr(listing, attr)
+        if isinstance(v, str) and len(v) > n:
+            setattr(listing, attr, v[: n - 1] + "…")
     listing.gtins = gtins
     db.flush()
     existing = set(db.scalars(select(ListingGtin.gtin).where(ListingGtin.listing_id == listing.id)))

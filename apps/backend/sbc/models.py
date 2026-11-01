@@ -544,7 +544,7 @@ class PriceHistory(Base):
     currency: Mapped[str | None] = mapped_column(String(3))
     tax_basis: Mapped[str | None] = mapped_column(String(5))  # net|gross
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    source: Mapped[str] = mapped_column(String(30))
+    source: Mapped[str] = mapped_column(String(100))  # z. B. "import:<job-uuid>"
 
 
 class SalesEstimate(Base):
