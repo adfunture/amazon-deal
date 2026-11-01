@@ -1,0 +1,206 @@
+{
+  "name": "SBC 5 – Online Opportunity Hunter (Feeds)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "f78c04e8-4a0c-5029-9cec-19f89bc4ae12",
+      "name": "Alle 6 Stunden",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nur offizielle APIs / autorisierte Feeds eintragen. Keine Captcha- oder Sperrenumgehung.\nreturn [\n  // { json: { url: 'https://partner.example/feed.csv', supplier_id: 'UUID', fileName: 'feed.csv' } },\n];"
+      },
+      "id": "1ff9e383-6f71-5f35-89eb-9993beed1f75",
+      "name": "Quellen (autorisierte Feeds)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "file"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "bba478e1-1ed6-579f-b9ce-7a3c14d98f5c",
+      "name": "Feed herunterladen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://REPLACE-WITH-BACKEND-DOMAIN/api/v1/imports",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formData",
+              "name": "supplier_id",
+              "value": "={{ $('Quellen (autorisierte Feeds)').item.json.supplier_id }}"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "file"
+            }
+          ]
+        }
+      },
+      "id": "e7547452-a5a9-5290-aeec-6de36701abb1",
+      "name": "Importjob anlegen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SBC API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {},
+      "id": "183d31ea-d73d-5ac9-bfe1-f0a9d607ee2d",
+      "name": "Bereits importiert / Zuordnung offen",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        960,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "Feed nicht erreichbar – Quelle als nicht verfügbar markieren"
+      },
+      "id": "5c6c150a-b671-5f22-84fc-5365e92482a5",
+      "name": "Quelle nicht verfügbar",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        720,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Alle 6 Stunden": {
+      "main": [
+        [
+          {
+            "node": "Quellen (autorisierte Feeds)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quellen (autorisierte Feeds)": {
+      "main": [
+        [
+          {
+            "node": "Feed herunterladen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Feed herunterladen": {
+      "main": [
+        [
+          {
+            "node": "Importjob anlegen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Quelle nicht verfügbar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Importjob anlegen": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Bereits importiert / Zuordnung offen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "saveManualExecutions": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "SBC Sourcing"
+    }
+  ],
+  "staticData": null,
+  "versionId": "7d5647eb-6c05-5b03-8ad3-21a8298cc001",
+  "description": "Lädt autorisierte Lieferanten-Feeds und übergibt sie der Import-Pipeline. Volle Quellenverwaltung folgt in Phase 5."
+}

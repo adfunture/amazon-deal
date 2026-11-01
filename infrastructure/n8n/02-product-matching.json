@@ -1,0 +1,160 @@
+{
+  "name": "SBC 2 – Product Matching",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/30 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "5f38ae3a-003e-5a56-85d2-79e10a636889",
+      "name": "Zeitplan",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://REPLACE-WITH-BACKEND-DOMAIN/api/v1/pipeline/analyze-pending",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"limit\": 2000, \"use_keepa\": false}"
+      },
+      "id": "1fe54c78-7d73-5de9-ab78-62b61609cebc",
+      "name": "Neue Angebote analysieren",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SBC API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://REPLACE-WITH-BACKEND-DOMAIN/api/v1/pipeline/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "8c3bad49-6260-5675-962b-966148213a3b",
+      "name": "Status abrufen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SBC API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "errorMessage": "Backend-Aufruf fehlgeschlagen – siehe Ausführungsdetails"
+      },
+      "id": "6e173a3f-b6ba-54c8-b80d-df7ba130e8d1",
+      "name": "Fehler melden",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        480,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Zeitplan": {
+      "main": [
+        [
+          {
+            "node": "Neue Angebote analysieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Neue Angebote analysieren": {
+      "main": [
+        [
+          {
+            "node": "Status abrufen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Status abrufen": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Fehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "saveManualExecutions": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "SBC Sourcing"
+    }
+  ],
+  "staticData": null,
+  "versionId": "9e1dfa3e-9990-5877-ba46-61c80308d4ce",
+  "description": "Plant Matching (Level 1–2 ohne Keepa) für neue Angebote ein. Unsichere Treffer landen im Matching-Review."
+}

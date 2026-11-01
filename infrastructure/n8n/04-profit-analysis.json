@@ -1,0 +1,110 @@
+{
+  "name": "SBC 4 – Profit Analysis",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 5 * * *"
+            }
+          ]
+        }
+      },
+      "id": "5f38ae3a-003e-5a56-85d2-79e10a636889",
+      "name": "Zeitplan",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://REPLACE-WITH-BACKEND-DOMAIN/api/v1/pipeline/recalculate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "8f1afaa2-3913-51cb-aa9f-647a3b8dc7da",
+      "name": "Kalkulation & Score neu berechnen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SBC API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "errorMessage": "Backend-Aufruf fehlgeschlagen – siehe Ausführungsdetails"
+      },
+      "id": "6e173a3f-b6ba-54c8-b80d-df7ba130e8d1",
+      "name": "Fehler melden",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        240,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Zeitplan": {
+      "main": [
+        [
+          {
+            "node": "Kalkulation & Score neu berechnen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kalkulation & Score neu berechnen": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Fehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "saveManualExecutions": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "SBC Sourcing"
+    }
+  ],
+  "staticData": null,
+  "versionId": "080c16d3-f910-5753-844b-431cbc40cd60",
+  "description": "Neuberechnung aller Kalkulationen und Scores (ohne externe API-Kosten)."
+}

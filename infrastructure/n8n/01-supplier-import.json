@@ -1,0 +1,415 @@
+{
+  "name": "SBC 1 – Supplier Import",
+  "nodes": [
+    {
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "read",
+        "format": "resolved",
+        "downloadAttachments": true,
+        "options": {
+          "customEmailConfig": "[\"UNSEEN\"]"
+        }
+      },
+      "id": "51a176a9-6d16-56d9-8237-8089b6b06425",
+      "name": "Lieferanten-Postfach",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "imap": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Lieferanten-Postfach"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sbc-supplier-import",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {
+          "binaryPropertyName": "file"
+        }
+      },
+      "id": "d19e2a3a-1c0f-554c-bc1f-eb5e5da1ca8d",
+      "name": "Webhook Upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Webhook Secret"
+        }
+      },
+      "webhookId": "1113da66-59c8-526c-92f8-19cc03743a54"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Jeden unterstützten Anhang als eigenes Item ausgeben\nconst allowed = ['xlsx','xlsm','xls','csv','tsv','txt','json','xml','zip'];\nconst out = [];\nfor (const item of $input.all()) {\n  const sender = (item.json.from?.value?.[0]?.address ?? item.json.from ?? '').toString().toLowerCase();\n  for (const [key, bin] of Object.entries(item.binary ?? {})) {\n    const ext = (bin.fileName ?? '').split('.').pop().toLowerCase();\n    if (!allowed.includes(ext)) continue;\n    out.push({ json: { sender, fileName: bin.fileName, subject: item.json.subject }, binary: { file: bin } });\n  }\n}\nreturn out;"
+      },
+      "id": "63bff120-8c90-5736-b2c8-4a962eb47ff7",
+      "name": "Anhänge aufteilen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(i => ({ json: { sender: (i.json.query?.sender ?? i.json.body?.sender ?? '').toLowerCase(), supplier_id: i.json.query?.supplier_id ?? i.json.body?.supplier_id ?? null }, binary: { file: Object.values(i.binary ?? {})[0] } }));"
+      },
+      "id": "b84b38d9-3f41-5d5a-ab97-02587da7230e",
+      "name": "Webhook normalisieren",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://REPLACE-WITH-BACKEND-DOMAIN/api/v1/suppliers-lookup/by-email",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "sender",
+              "value": "={{ $json.sender }}"
+            }
+          ]
+        }
+      },
+      "id": "8dcb188b-1ea6-5151-b02d-eedd12261940",
+      "name": "Lieferant zuordnen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SBC API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const src = $('Lieferant zuordnen').all();\nreturn $input.all().map((it, i) => ({ json: { ...it.json, supplier_id: it.json.supplier_id ?? src[i]?.json?.supplier_id, auto_start: src[i]?.json?.auto_start ?? false }, binary: $('Anhänge aufteilen').all()[i]?.binary ?? $('Webhook normalisieren').all()[i]?.binary }));"
+      },
+      "id": "f6396c54-6e83-513d-bc0a-bf9be7797cf4",
+      "name": "Daten zusammenführen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://REPLACE-WITH-BACKEND-DOMAIN/api/v1/imports",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formData",
+              "name": "supplier_id",
+              "value": "={{ $json.supplier_id }}"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "file"
+            }
+          ]
+        }
+      },
+      "id": "e7547452-a5a9-5290-aeec-6de36701abb1",
+      "name": "Importjob anlegen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SBC API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.analysis.profile_applied }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "leftValue": "={{ $('Daten zusammenführen').item.json.auto_start }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      },
+      "id": "30217303-61dc-5c36-8535-90a48377ae9f",
+      "name": "Profil erkannt & Autostart?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://REPLACE-WITH-BACKEND-DOMAIN/api/v1/imports/{{ $json.id }}/mapping",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ mapping: $json.column_mapping, save_profile: false, start: true }) }}"
+      },
+      "id": "5542de71-a1fa-5974-bf73-1f53f61fd486",
+      "name": "Import starten",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        -80
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SBC API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {},
+      "id": "1c432f4f-26b7-51ba-9173-535c5fbb2c11",
+      "name": "Manuelle Zuordnung nötig",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "Absender ist keinem Lieferanten zugeordnet (email_import_rules)"
+      },
+      "id": "17396a2b-51c6-520c-b4d9-43eb69952a39",
+      "name": "Fehler: Lieferant unbekannt",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        720,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "Upload vom Backend abgelehnt – Details in der Ausführung"
+      },
+      "id": "31ddea48-e82a-5630-a52a-baa1bb2395ab",
+      "name": "Fehler: Upload abgelehnt",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Lieferanten-Postfach": {
+      "main": [
+        [
+          {
+            "node": "Anhänge aufteilen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Upload": {
+      "main": [
+        [
+          {
+            "node": "Webhook normalisieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anhänge aufteilen": {
+      "main": [
+        [
+          {
+            "node": "Lieferant zuordnen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook normalisieren": {
+      "main": [
+        [
+          {
+            "node": "Lieferant zuordnen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lieferant zuordnen": {
+      "main": [
+        [
+          {
+            "node": "Daten zusammenführen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fehler: Lieferant unbekannt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daten zusammenführen": {
+      "main": [
+        [
+          {
+            "node": "Importjob anlegen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Importjob anlegen": {
+      "main": [
+        [
+          {
+            "node": "Profil erkannt & Autostart?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fehler: Upload abgelehnt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Profil erkannt & Autostart?": {
+      "main": [
+        [
+          {
+            "node": "Import starten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Manuelle Zuordnung nötig",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "saveManualExecutions": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "SBC Sourcing"
+    }
+  ],
+  "staticData": null,
+  "versionId": "4a444c09-7859-51bf-b1c4-3f74fbdec09d",
+  "description": "E-Mail-Anhänge/Webhook → Importjob. Start nur automatisch, wenn ein gespeichertes Profil passt und auto_start beim Lieferanten aktiv ist."
+}

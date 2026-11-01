@@ -1,0 +1,206 @@
+{
+  "name": "SBC 6 – Daily Sourcing Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "45 6 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "7218feb4-4cd5-59d5-998a-3ba88d3e7b0e",
+      "name": "Täglich 06:45",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://REPLACE-WITH-BACKEND-DOMAIN/api/v1/reports/daily?limit=25",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "e6d785df-6d39-5cfa-976e-b013e23822fc",
+      "name": "Top Opportunities (dedupliziert)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SBC API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $json.items ?? [];\nif (!items.length) return [{ json: { skip: true } }];\nconst rows = items.map((it, i) => `<tr><td>${i + 1}</td><td>${it.title ?? ''}</td><td>${it.gtin ?? ''}</td><td>${it.asin ?? ''}</td>`\n  + `<td>${it.supplier}</td><td>${it.buy} €</td><td>${it.sell} €</td><td>${it.contribution} €</td><td>${it.score}</td><td>${it.test_qty ?? ''}</td></tr>`).join('');\nconst html = `<h2>SBC Sourcing – Top-Einkaufschancen</h2><table border=\"1\" cellpadding=\"4\" style=\"border-collapse:collapse\">`\n  + `<tr><th>#</th><th>Produkt</th><th>EAN</th><th>ASIN</th><th>Lieferant</th><th>EK netto</th><th>VK brutto</th><th>DB</th><th>Score</th><th>Testmenge</th></tr>${rows}</table>`\n  + `<p>Vorschläge – jeder Einkauf erfordert manuelle Freigabe in der Einkaufsliste.</p>`;\nreturn [{ json: { skip: false, html, count: items.length } }];"
+      },
+      "id": "0a03ef0b-fb17-5e8e-9c55-6a0c1bc05986",
+      "name": "Bericht erzeugen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      },
+      "id": "d51d4f1e-ead4-51c0-a5fb-42f1a00085b8",
+      "name": "Etwas zu berichten?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "REPLACE@example.com",
+        "toEmail": "REPLACE@example.com",
+        "subject": "=SBC Sourcing – {{ $json.count }} Einkaufschancen",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "cfcce78c-bb1a-5f1e-bcaf-6ec5f36d6833",
+      "name": "E-Mail an Einkauf (DEAKTIVIERT)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        960,
+        -60
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "SMTP"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "errorMessage": "Bericht konnte nicht abgerufen werden"
+      },
+      "id": "6e173a3f-b6ba-54c8-b80d-df7ba130e8d1",
+      "name": "Fehler melden",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        480,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Täglich 06:45": {
+      "main": [
+        [
+          {
+            "node": "Top Opportunities (dedupliziert)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Top Opportunities (dedupliziert)": {
+      "main": [
+        [
+          {
+            "node": "Bericht erzeugen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bericht erzeugen": {
+      "main": [
+        [
+          {
+            "node": "Etwas zu berichten?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Etwas zu berichten?": {
+      "main": [
+        [
+          {
+            "node": "E-Mail an Einkauf (DEAKTIVIERT)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "saveManualExecutions": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "SBC Sourcing"
+    }
+  ],
+  "staticData": null,
+  "versionId": "080e1ff6-360d-59dd-afc2-039dd32090bc",
+  "description": "Erzeugt den Tagesbericht. Der E-Mail-Knoten ist deaktiviert und muss bewusst aktiviert werden."
+}
